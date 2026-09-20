@@ -296,6 +296,12 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 			snapshot["merchant_id"] = merchantID
 		}
 	}
+	if providerKey == payment.TypeHupijiao {
+		if appID := strings.TrimSpace(sel.Config["appid"]); appID != "" {
+			snapshot["merchant_app_id"] = appID
+		}
+		snapshot["currency"] = payment.DefaultPaymentCurrency
+	}
 	if providerKey == payment.TypeStripe {
 		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
 	}

@@ -117,6 +117,19 @@ Compatible with any payment service that implements the EasyPay protocol.
 | **Merchant ID (PID)** | EasyPay merchant ID | Yes |
 | **Merchant Key (PKey)** | EasyPay merchant secret key | Yes |
 | **API Base URL** | EasyPay API base address | Yes |
+
+### Hupijiao
+
+Native integration with the Hupijiao payment API using `appid`, `appsecret`, and MD5 `hash` signatures. Supports Alipay and WeChat Pay.
+
+| Parameter | Description | Required |
+|-----------|-------------|----------|
+| **App ID** | Hupijiao App ID | Yes |
+| **App Secret** | Hupijiao App Secret | Yes |
+| **API Base URL** | Defaults to `https://api.xunhupay.com` | Yes |
+
+The asynchronous callback URL is generated automatically:
+`https://your-domain.com/api/v1/payment/webhook/hupijiao`
 | **Alipay Channel ID** | Specify Alipay channel (optional) | No |
 | **WeChat Channel ID** | Specify WeChat channel (optional) | No |
 
