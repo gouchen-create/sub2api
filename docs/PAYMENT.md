@@ -127,11 +127,15 @@ Native integration with the Hupijiao payment API using `appid`, `appsecret`, and
 | **App ID** | Hupijiao App ID | Yes |
 | **App Secret** | Hupijiao App Secret | Yes |
 | **API Base URL** | Defaults to `https://api.xunhupay.com` | Yes |
-
-The asynchronous callback URL is generated automatically:
-`https://your-domain.com/api/v1/payment/webhook/hupijiao`
 | **Alipay Channel ID** | Specify Alipay channel (optional) | No |
 | **WeChat Channel ID** | Specify WeChat channel (optional) | No |
+
+The asynchronous callback URL is generated automatically:
+For the production `chenshuapi.com` instance, use:
+
+Notify URL: `https://api.chenshuapi.com/api/v1/payment/webhook/hupijiao`
+
+Return URL: `https://chenshuapi.com/payment/result`
 
 ### Alipay (Direct)
 

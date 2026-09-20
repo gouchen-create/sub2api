@@ -139,7 +139,13 @@ Sub2API 内置支付系统，支持用户自助充值，无需部署独立的支
 | **API 地址** | 默认 `https://api.xunhupay.com` | 是 |
 
 虎皮椒异步通知地址由系统自动生成：
-`https://your-domain.com/api/v1/payment/webhook/hupijiao`
+线上 `chenshuapi.com` 实例的异步通知地址为：
+
+`https://api.chenshuapi.com/api/v1/payment/webhook/hupijiao`
+
+同步跳转地址为：
+
+`https://chenshuapi.com/payment/result`
 
 虎皮椒接口使用 CNY。切换前建议保留 EasyPay，先创建最低金额真实订单，确认下单、回调、订单完成、余额到账和查单均正常后再切换可见支付来源。
 
