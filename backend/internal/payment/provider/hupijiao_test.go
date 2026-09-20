@@ -41,7 +41,7 @@ func TestHupijiaoCreateQueryAndNotification(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/payment/do.html":
-			resp := hupijiaoCreateResponse{OpenOrderID: "hp-123", URLQRCode: "https://pay.example/qr", URL: "https://pay.example/h5", ErrCode: 0, ErrMsg: "success!"}
+			resp := hupijiaoCreateResponse{OpenID: json.RawMessage("123456"), OpenOrderID: "hp-123", URLQRCode: "https://pay.example/qr", URL: "https://pay.example/h5", ErrCode: 0, ErrMsg: "success!"}
 			resp.Hash = hupijiaoHash(resp.rawFields(), secret)
 			_ = json.NewEncoder(w).Encode(resp)
 		case "/payment/query.html":

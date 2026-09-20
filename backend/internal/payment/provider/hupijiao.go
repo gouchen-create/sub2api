@@ -141,7 +141,7 @@ func (h *Hupijiao) CreatePayment(ctx context.Context, req payment.CreatePaymentR
 	}
 	tradeNo := strings.TrimSpace(resp.OpenOrderID)
 	if tradeNo == "" {
-		tradeNo = strings.TrimSpace(resp.OpenID)
+		tradeNo = strings.TrimSpace(hupijiaoScalarString(resp.OpenID))
 	}
 	if tradeNo == "" {
 		tradeNo = req.OrderID
@@ -291,17 +291,35 @@ func (h *Hupijiao) Refund(ctx context.Context, req payment.RefundRequest) (*paym
 }
 
 type hupijiaoCreateResponse struct {
-	OpenID      string `json:"openid"`
-	OpenOrderID string `json:"open_order_id"`
-	URLQRCode   string `json:"url_qrcode"`
-	URL         string `json:"url"`
-	ErrCode     int    `json:"errcode"`
-	ErrMsg      string `json:"errmsg"`
-	Hash        string `json:"hash"`
+	OpenID      json.RawMessage `json:"openid"`
+	OpenOrderID string          `json:"open_order_id"`
+	URLQRCode   string          `json:"url_qrcode"`
+	URL         string          `json:"url"`
+	ErrCode     int             `json:"errcode"`
+	ErrMsg      string          `json:"errmsg"`
+	Hash        string          `json:"hash"`
 }
 
 func (r hupijiaoCreateResponse) rawFields() map[string]string {
-	return map[string]string{"openid": r.OpenID, "open_order_id": r.OpenOrderID, "url_qrcode": r.URLQRCode, "url": r.URL, "errcode": strconv.Itoa(r.ErrCode), "errmsg": r.ErrMsg}
+	return map[string]string{"openid": hupijiaoScalarString(r.OpenID), "open_order_id": r.OpenOrderID, "url_qrcode": r.URLQRCode, "url": r.URL, "errcode": strconv.Itoa(r.ErrCode), "errmsg": r.ErrMsg}
+}
+
+// hupijiaoScalarString accepts scalar fields that the API may return as either
+// JSON strings or JSON numbers (notably openid).
+func hupijiaoScalarString(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number.String()
+	}
+	return ""
 }
 
 type hupijiaoQueryData struct {
