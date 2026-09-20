@@ -74,7 +74,7 @@ func TestHupijiaoCreateQueryAndNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.TradeNo != "hp-123" || created.QRCode == "" || created.PayURL == "" {
+	if created.TradeNo != "hp-123" || created.QRCode != "https://pay.example/h5" || created.PayURL != "https://pay.example/h5" {
 		t.Fatalf("unexpected create response: %#v", created)
 	}
 
