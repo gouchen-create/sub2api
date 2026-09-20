@@ -7,16 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"testing"
 	"strings"
+	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 )
 
 func TestHupijiaoCreateQueryAndNotification(t *testing.T) {
 	const secret = "test-app-secret"
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)

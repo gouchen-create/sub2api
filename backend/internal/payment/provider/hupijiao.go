@@ -429,13 +429,13 @@ func hupijiaoHash(params map[string]string, secret string) string {
 	var builder strings.Builder
 	for index, key := range keys {
 		if index > 0 {
-			builder.WriteByte('&')
+			_ = builder.WriteByte('&')
 		}
-		builder.WriteString(key)
-		builder.WriteByte('=')
-		builder.WriteString(params[key])
+		_, _ = builder.WriteString(key)
+		_ = builder.WriteByte('=')
+		_, _ = builder.WriteString(params[key])
 	}
-	builder.WriteString(secret)
+	_, _ = builder.WriteString(secret)
 	digest := md5.Sum([]byte(builder.String()))
 	return hex.EncodeToString(digest[:])
 }
