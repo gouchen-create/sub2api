@@ -153,7 +153,15 @@ func (h *Hupijiao) CreatePayment(ctx context.Context, req payment.CreatePaymentR
 	if req.IsMobile && payURL == "" {
 		payURL = resp.URLQRCode
 	}
-	return &payment.CreatePaymentResponse{TradeNo: tradeNo, PayURL: payURL, QRCode: resp.URLQRCode}, nil
+	// The frontend renders QRCode as a QR payload. Hupijiao's url_qrcode is a
+	// provider-side QR endpoint intended to be displayed directly on desktop,
+	// so encoding it again makes scanners open that endpoint instead of the
+	// payment page. The url endpoint redirects to the appropriate mobile flow.
+	qrCode := resp.URL
+	if strings.TrimSpace(qrCode) == "" {
+		qrCode = resp.URLQRCode
+	}
+	return &payment.CreatePaymentResponse{TradeNo: tradeNo, PayURL: payURL, QRCode: qrCode}, nil
 }
 
 func (h *Hupijiao) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
