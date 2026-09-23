@@ -157,6 +157,15 @@ output/
 .codegraph/
 issues/
 
+# Isolated local review environment data and build artifacts
+deploy/review-data/
+deploy/review-postgres_data/
+deploy/review-redis_data/
+deploy/review2-data/
+deploy/review2-postgres_data/
+deploy/review2-redis_data/
+backend/.artifacts/
+
 # Vitest / Vite cache at repo root
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
