@@ -170,3 +170,12 @@ backend/.artifacts/
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/
+
+# 本地备份与调试产物：backups/ 可能含生产数据库 dump、扩展源码归档与凭据，禁止进入仓库
+/backups/
+/.playwright-cli/
+/.playwright-mcp/
+/.prod-update-guard-src/
+/txt/
+backend/.tmp-sub2api-*
+*.network-response
