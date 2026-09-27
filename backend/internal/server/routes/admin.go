@@ -130,6 +130,30 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// 经营对账（Companion 旁路服务代理，仅管理员可访问）
+		registerCompanionRoutes(admin, h)
+	}
+}
+
+// registerCompanionRoutes 注册 Companion 经营对账的只读与同步接口。
+//
+// Companion 自身的看板口令保留在服务端环境变量里，浏览器只与本项目的管理员接口交互，
+// 因此 Companion 的独立 Basic 凭据不需要、也不会下发到前端。
+func registerCompanionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	companion := admin.Group("/companion")
+	{
+		companion.GET("/status", h.Admin.Companion.Status)
+		companion.GET("/summary", h.Admin.Companion.Summary)
+		companion.GET("/timeseries", h.Admin.Companion.Timeseries)
+		companion.GET("/requests", h.Admin.Companion.Requests)
+		companion.GET("/account-rules", h.Admin.Companion.AccountRules)
+		companion.PUT("/account-rules/:account_id", h.Admin.Companion.UpsertAccountRule)
+		companion.DELETE("/account-rules/:account_id", h.Admin.Companion.DeleteAccountRule)
+		companion.POST("/collect", h.Admin.Companion.Collect)
+		companion.GET("/a6/backfill", h.Admin.Companion.A6BackfillStatus)
+		companion.POST("/a6/backfill", h.Admin.Companion.StartA6Backfill)
+		companion.POST("/upstream/import", h.Admin.Companion.ImportUpstream)
 	}
 }
 
