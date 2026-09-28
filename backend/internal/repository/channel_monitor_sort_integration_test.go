@@ -56,6 +56,30 @@ func (s *ChannelMonitorRepoSuite) TestList_OrdersBySortOrderThenID() {
 	s.Require().Less(indexByID[third.ID], indexByID[first.ID], "larger sort_order must come later")
 }
 
+func (s *ChannelMonitorRepoSuite) TestList_PaginatesAcrossSortOrder() {
+	s.mustCreateMonitor("cm-page-first", 10)
+	second := s.mustCreateMonitor("cm-page-second", 20)
+	s.mustCreateMonitor("cm-page-third", 30)
+
+	page1, total, err := s.repo.List(s.ctx, service.ChannelMonitorListParams{
+		Page:     1,
+		PageSize: 1,
+	})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), total)
+	s.Require().Len(page1, 1)
+	s.Require().Equal(10, page1[0].SortOrder, "page 1 must start from the smallest sort_order")
+
+	page2, _, err := s.repo.List(s.ctx, service.ChannelMonitorListParams{
+		Page:     2,
+		PageSize: 1,
+	})
+	s.Require().NoError(err)
+	s.Require().Len(page2, 1)
+	s.Require().Equal(second.ID, page2[0].ID, "page 2 must skip page 1 rows（Offset 缺失回归守卫）")
+	s.Require().Equal(20, page2[0].SortOrder)
+}
+
 func (s *ChannelMonitorRepoSuite) TestCreate_PersistsSortOrder() {
 	m := s.mustCreateMonitor("cm-sort-create", 42)
 	got, err := s.repo.GetByID(s.ctx, m.ID)

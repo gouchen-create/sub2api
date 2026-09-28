@@ -192,6 +192,7 @@ func (r *channelMonitorRepository) List(ctx context.Context, params service.Chan
 
 	rows, err := q.
 		Order(dbent.Asc(channelmonitor.FieldSortOrder), dbent.Asc(channelmonitor.FieldID)).
+		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		All(ctx)
 	if err != nil {
