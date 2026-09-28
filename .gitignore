@@ -180,3 +180,6 @@ backend/.artifacts/
 /txt/
 backend/.tmp-sub2api-*
 *.network-response
+
+# 本地 worktree 工作区（.worktrees/ 下是分支检出，不入库）
+.worktrees/
