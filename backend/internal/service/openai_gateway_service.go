@@ -6141,6 +6141,18 @@ func OpenAICompactSessionSeedKeyForTest() string {
 	return openAICompactSessionSeedKey
 }
 
+func OpenAIResponsesAutoCompactBodySignalKeyForTest() string {
+	return openAIResponsesAutoCompactBodySignalKey
+}
+
+func DetectOpenAIResponsesCompactBodySignal(c *gin.Context, body []byte) (bool, string) {
+	return detectOpenAIResponsesCompactBodySignal(c, body)
+}
+
+func MarkOpenAIResponsesCompactBodySignal(c *gin.Context, reason string) {
+	markOpenAIResponsesCompactBodySignal(c, reason)
+}
+
 func NormalizeOpenAICompactRequestBodyForTest(body []byte) ([]byte, bool, error) {
 	return normalizeOpenAICompactRequestBody(body)
 }
@@ -6148,6 +6160,45 @@ func NormalizeOpenAICompactRequestBodyForTest(body []byte) ([]byte, bool, error)
 func isOpenAIResponsesCompactPath(c *gin.Context) bool {
 	suffix := strings.TrimSpace(openAIResponsesRequestPathSuffix(c))
 	return suffix == "/compact" || strings.HasPrefix(suffix, "/compact/")
+}
+
+const openAIResponsesAutoCompactMinBodyBytes = 8 << 20
+
+const openAIResponsesAutoCompactBodySignalKey = "openai_responses_auto_compact_body_signal"
+
+func detectOpenAIResponsesCompactBodySignal(c *gin.Context, body []byte) (bool, string) {
+	if len(body) < openAIResponsesAutoCompactMinBodyBytes {
+		return false, ""
+	}
+	if c == nil || c.Request == nil {
+		return false, ""
+	}
+	if !openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		return false, ""
+	}
+	if !gjson.ValidBytes(body) {
+		return false, ""
+	}
+
+	promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+	if promptCacheKey == "" {
+		return false, ""
+	}
+	if !gjson.GetBytes(body, "input").Exists() {
+		return false, ""
+	}
+	if strings.TrimSpace(gjson.GetBytes(body, "model").String()) == "" {
+		return false, ""
+	}
+
+	return true, "large_codex_prompt_cache_body"
+}
+
+func markOpenAIResponsesCompactBodySignal(c *gin.Context, reason string) {
+	if c == nil || strings.TrimSpace(reason) == "" {
+		return
+	}
+	c.Set(openAIResponsesAutoCompactBodySignalKey, strings.TrimSpace(reason))
 }
 
 func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
@@ -6205,6 +6256,9 @@ func resolveOpenAICompactSessionID(c *gin.Context) string {
 func openAIResponsesRequestPathSuffix(c *gin.Context) string {
 	if c == nil || c.Request == nil || c.Request.URL == nil {
 		return ""
+	}
+	if _, ok := c.Get(openAIResponsesAutoCompactBodySignalKey); ok {
+		return "/compact"
 	}
 	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
 	if normalizedPath == "" {

@@ -201,6 +201,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 
 	setOpsRequestContext(c, "", false)
+	if detected, reason := service.DetectOpenAIResponsesCompactBodySignal(c, body); detected {
+		service.MarkOpenAIResponsesCompactBodySignal(c, reason)
+		reqLog.Info("codex.remote_compact.detected_body_signal",
+			zap.String("compact_signal_reason", reason),
+			zap.Int("request_body_bytes", len(body)),
+		)
+	}
 	sessionHashBody := body
 	if service.IsOpenAIResponsesCompactPathForTest(c) {
 		if compactSeed := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); compactSeed != "" {
@@ -564,11 +571,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 }
 
 func isOpenAIRemoteCompactPath(c *gin.Context) bool {
-	if c == nil || c.Request == nil || c.Request.URL == nil {
-		return false
-	}
-	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
-	return strings.HasSuffix(normalizedPath, "/responses/compact")
+	return service.IsOpenAIResponsesCompactPathForTest(c)
 }
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
@@ -610,6 +613,13 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 		zap.Int64("latency_ms", latencyMs),
 		zap.String("path", path),
 		zap.Bool("force_codex_cli", h != nil && h.cfg != nil && h.cfg.Gateway.ForceCodexCLI),
+	}
+	if c != nil {
+		if reason, ok := c.Get(service.OpenAIResponsesAutoCompactBodySignalKeyForTest()); ok {
+			if reasonStr, ok := reason.(string); ok && strings.TrimSpace(reasonStr) != "" {
+				fields = append(fields, zap.String("compact_signal_reason", strings.TrimSpace(reasonStr)))
+			}
+		}
 	}
 
 	if c != nil {
