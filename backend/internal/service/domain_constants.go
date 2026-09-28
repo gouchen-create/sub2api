@@ -501,6 +501,51 @@ const (
 	// pre-filled when creating a new channel monitor from the admin UI. Range: [15, 3600].
 	SettingKeyChannelMonitorDefaultIntervalSeconds = "channel_monitor_default_interval_seconds"
 
+	// ---- V1 主动探测调优（可在管理员端「渠道监控 → 探测调优」里热改，60 秒内生效）----
+
+	// SettingKeyChannelMonitorWorkerConcurrency 调度器并发执行的探测数上限。
+	// 提高可缩短一轮探测的墙钟时间，但过高会让上游限流、把排队的延迟误记成
+	// 渠道质量下降（实测该上游在并发 20 左右开始出现 p95 劣化）。Range: [1, 50]。
+	SettingKeyChannelMonitorWorkerConcurrency = "channel_monitor_worker_concurrency"
+
+	// SettingKeyChannelMonitorResponseHeaderTimeoutSeconds 等待上游响应头的超时。
+	// 超过该值判定为 error（红）。默认 30 秒。Range: [5, 300]。
+	SettingKeyChannelMonitorResponseHeaderTimeoutSeconds = "channel_monitor_response_header_timeout_seconds"
+
+	// SettingKeyChannelMonitorIdleConnTimeoutSeconds HTTP 连接池空闲连接保活时长。
+	// 必须明显大于探测间隔，否则每轮都重建连接、把上游冷启动延迟记成渠道故障。
+	// 默认 1800 秒（30 分钟）。Range: [30, 7200]。
+	SettingKeyChannelMonitorIdleConnTimeoutSeconds = "channel_monitor_idle_conn_timeout_seconds"
+
+	// SettingKeyChannelMonitorMaxIdleConnsPerHost 每个上游主机保留的空闲连接数。
+	// Go 的 http.Transport 默认只有 2；而 100 个渠道往往指向同一个 host，
+	// 默认值会让绝大部分探测都新建连接。默认 16。Range: [1, 200]。
+	SettingKeyChannelMonitorMaxIdleConnsPerHost = "channel_monitor_max_idle_conns_per_host"
+
+	// SettingKeyChannelMonitorRequestTimeoutSeconds 单次探测的总超时（含读取响应体）。
+	// 默认 45 秒。Range: [10, 600]。
+	SettingKeyChannelMonitorRequestTimeoutSeconds = "channel_monitor_request_timeout_seconds"
+
+	// 探测调优参数的取值范围（handler 校验与 normalize 共用）。
+	ChannelMonitorWorkerConcurrencyMin     = 1
+	ChannelMonitorWorkerConcurrencyMax     = 50
+	ChannelMonitorWorkerConcurrencyDefault = 5
+	ChannelMonitorResponseHeaderTimeoutMin = 5
+	ChannelMonitorResponseHeaderTimeoutMax = 300
+	// ChannelMonitorResponseHeaderTimeoutDefault 与历史硬编码值保持一致，避免升级后行为漂移。
+	ChannelMonitorResponseHeaderTimeoutDefault = 30
+	ChannelMonitorIdleConnTimeoutMin           = 30
+	ChannelMonitorIdleConnTimeoutMax           = 7200
+	// ChannelMonitorIdleConnTimeoutDefault 由 30 秒提高到 1800 秒：60 秒探测间隔下，
+	// 30 秒保活会让连接在两次探测之间全部过期，逼出上游冷启动。
+	ChannelMonitorIdleConnTimeoutDefault   = 1800
+	ChannelMonitorMaxIdleConnsPerHostMin   = 1
+	ChannelMonitorMaxIdleConnsPerHostMax   = 200
+	ChannelMonitorMaxIdleConnsPerHostDefault = 16
+	ChannelMonitorRequestTimeoutMin        = 10
+	ChannelMonitorRequestTimeoutMax        = 600
+	ChannelMonitorRequestTimeoutDefault    = 45
+
 	// SettingKeyChannelMonitorHideThroughput hides RPM/TPM (and similar absolute
 	// throughput rates) from non-admin user-facing monitor APIs and UI, so users
 	// cannot reverse-estimate fleet volume from rates × window length.

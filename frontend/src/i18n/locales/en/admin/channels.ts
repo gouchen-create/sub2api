@@ -556,6 +556,7 @@ export default {
         provider: 'Provider',
         primaryModel: 'Primary Model',
         availability7d: '7d Availability',
+        sortOrder: 'Display Order',
         latency: 'Latency (ms)',
         enabled: 'Enabled',
         actions: 'Actions'
@@ -563,6 +564,8 @@ export default {
       form: {
         name: 'Name',
         namePlaceholder: 'Enter monitor name',
+        sortOrder: 'Display Order',
+        sortOrderHint: 'Smaller numbers appear first; default is 1000',
         provider: 'Platform',
         checkMode: 'Check Mode',
         checkModeProbe: 'Probe',
@@ -668,7 +671,26 @@ export default {
           description: 'Description',
           descriptionPlaceholder: 'Optional: what this template is for, capture date, etc.'
         }
-      }
+      },
+      tuning: {
+        title: 'Probe tuning',
+        subtitle: 'Concurrency, timeouts and connection keep-alive — applies within ~60s, no restart needed',
+        unsaved: 'Unsaved',
+        range: 'Range',
+        saveSuccess: 'Saved. Applied on the next probe cycle (within ~60s).',
+        effectiveHint: 'Note: connection keep-alive must be clearly longer than the probe interval, otherwise every probe rebuilds connections and upstream cold-start latency gets recorded as a channel fault. Excessively high concurrency makes the upstream rate-limit, mixing queueing delay into the measured quality — keep it at or below 10.',
+        highConcurrencyWarning: 'Concurrency is above 10: the upstream may start rate-limiting, so measured latency now includes queueing we caused ourselves and no longer reflects true channel quality.',
+        workerConcurrency: 'Probe concurrency',
+        workerConcurrencyHint: 'Number of probes running at once. Higher shortens a full round; too high triggers upstream rate limiting.',
+        responseHeaderTimeout: 'Response header timeout',
+        responseHeaderTimeoutHint: 'Upper bound for waiting on upstream response headers; exceeding it marks the probe as failed (red).',
+        idleConnTimeout: 'Idle connection keep-alive',
+        idleConnTimeoutHint: 'How long idle connections are kept. Must be clearly longer than the probe interval or every round rebuilds them.',
+        maxIdleConnsPerHost: 'Idle conns per host',
+        maxIdleConnsPerHostHint: 'Idle connections kept per upstream host. The default is small and makes probes reconnect constantly.',
+        requestTimeout: 'Total request timeout',
+        requestTimeoutHint: 'Total time limit for a single probe, including reading the response body.',
+      },
     },
 
     // Subscriptions

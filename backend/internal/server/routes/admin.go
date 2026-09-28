@@ -817,6 +817,10 @@ func registerChannelMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers, s
 	{
 		monitors.GET("", h.Admin.ChannelMonitor.List)
 		monitors.POST("", h.Admin.ChannelMonitor.Create)
+		// 探测调优（V1 主动探测的并发/超时/连接保活）。注册在 /:id 之前：
+		// gin 静态路径优先于参数路径，不会被 :id 吃掉。
+		monitors.GET("/tuning", h.Admin.ChannelMonitor.GetTuning)
+		monitors.PUT("/tuning", h.Admin.ChannelMonitor.UpdateTuning)
 		monitors.GET("/:id", h.Admin.ChannelMonitor.Get)
 		monitors.POST("/:id/duplicate", h.Admin.ChannelMonitor.Duplicate)
 		monitors.PUT("/:id", h.Admin.ChannelMonitor.Update)

@@ -556,6 +556,7 @@ export default {
         provider: '供应商',
         primaryModel: '主模型',
         availability7d: '7 天可用率',
+        sortOrder: '展示顺序',
         latency: '延迟 (ms)',
         enabled: '启用',
         actions: '操作'
@@ -563,6 +564,8 @@ export default {
       form: {
         name: '名称',
         namePlaceholder: '输入监控名称',
+        sortOrder: '展示顺序',
+        sortOrderHint: '数字越小越靠前，默认值为 1000',
         provider: '平台',
         checkMode: '检查方式',
         checkModeProbe: '探活',
@@ -668,7 +671,26 @@ export default {
           description: '说明',
           descriptionPlaceholder: '可选：说明这个模板的用途和来源（抓包日期等）'
         }
-      }
+      },
+      tuning: {
+        title: '探测调优',
+        subtitle: '并发、超时与连接保活，改完约 60 秒内自动生效，无需重启服务',
+        unsaved: '未保存',
+        range: '范围',
+        saveSuccess: '已保存，将在下一轮探测（约 60 秒内）自动生效',
+        effectiveHint: '说明：连接保活时长需明显大于探测间隔，否则每次探测都要重建连接，会把上游冷启动延迟误记成渠道故障。并发数过高会让上游限流、把排队延迟当成渠道质量下降，建议不超过 10。',
+        highConcurrencyWarning: '当前并发高于 10：上游可能开始限流，探测到的延迟会混入我们自己造成的排队，测出的结果不再代表渠道真实质量。',
+        workerConcurrency: '探测并发数',
+        workerConcurrencyHint: '同时执行的探测数量。提高可缩短一轮耗时，过高会触发上游限流。',
+        responseHeaderTimeout: '响应头超时',
+        responseHeaderTimeoutHint: '等待上游返回响应头的上限，超过即判定为失败（红）。',
+        idleConnTimeout: '连接空闲保活',
+        idleConnTimeoutHint: '空闲连接的保活时长。必须明显大于探测间隔，否则每轮都重建连接。',
+        maxIdleConnsPerHost: '每主机空闲连接',
+        maxIdleConnsPerHostHint: '每个上游地址保留的空闲连接数。默认值偏小会让探测频繁新建连接。',
+        requestTimeout: '请求总超时',
+        requestTimeoutHint: '单次探测的总时长上限，包含读取响应体。',
+      },
     },
 
     // Subscriptions Management

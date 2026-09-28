@@ -779,6 +779,7 @@ func entToServiceMonitor(row *dbent.ChannelMonitor) *service.ChannelMonitor {
 		PrimaryModel:         row.PrimaryModel,
 		ExtraModels:          extras,
 		GroupName:            row.GroupName,
+		SortOrder:            row.SortOrder,
 		Enabled:              row.Enabled,
 		IntervalSeconds:      row.IntervalSeconds,
 		JitterSeconds:        row.JitterSeconds,

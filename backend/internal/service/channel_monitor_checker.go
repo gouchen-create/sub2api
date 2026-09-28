@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -19,21 +22,110 @@ import (
 
 // monitorHTTPClient 共享一个 http.Client，避免每次检测重建 transport。
 // 自定义 Transport 在 dial 时强制再次校验 IP，防止 DNS rebinding 绕过 validateEndpoint。
-var monitorHTTPClient = newSSRFSafeHTTPClient(monitorRequestTimeout)
+//
+// 【可调优】这些不再是包级常量：runner 每次 fire 前通过 ApplyMonitorTuning 注入
+// 当前生效参数，monitorHTTPClient() 按参数指纹懒重建 client，因此管理员在后台
+// 改完超时/保活参数后无需重启进程即可生效。
+var (
+	monitorClientMu    sync.Mutex
+	monitorClientCache *http.Client
+	monitorPingCache   *http.Client
+	monitorClientFingerprint string
+)
+
+// monitorTuningState 保存当前生效的探测调优参数（原子读写，供 fire 与 checker 并发访问）。
+var monitorTuningState atomic.Value // ChannelMonitorTuning
+
+// ApplyMonitorTuning 更新全局探测调优参数；参数变化会触发下次取 client 时重建 transport。
+// 由 ChannelMonitorRunner 在每次 fire 前调用，传零值等价于恢复默认。
+func ApplyMonitorTuning(t ChannelMonitorTuning) {
+	if t.WorkerConcurrency <= 0 && t.ResponseHeaderTimeoutSeconds <= 0 && t.RequestTimeoutSeconds <= 0 {
+		t = DefaultChannelMonitorTuning()
+	}
+	monitorTuningState.Store(NormalizeChannelMonitorTuning(t))
+}
+
+// currentMonitorTuning 返回当前生效参数（未注入过时为默认值）。
+func currentMonitorTuning() ChannelMonitorTuning {
+	if v, ok := monitorTuningState.Load().(ChannelMonitorTuning); ok {
+		return v
+	}
+	return DefaultChannelMonitorTuning()
+}
+
+// monitorHTTPClient 返回当前参数下应使用的检测 client。
+// 参数未变则复用缓存；变了则重建（旧 client 的 idle 连接会被 Go 在 GC 时关闭）。
+func monitorHTTPClient() *http.Client {
+	return monitorClientFor(false)
+}
 
 // monitorPingHTTPClient 用于 endpoint origin 的 HEAD ping，超时更短。
-var monitorPingHTTPClient = newSSRFSafeHTTPClient(monitorPingTimeout)
+func monitorPingHTTPClient() *http.Client {
+	return monitorClientFor(true)
+}
 
-// newSSRFSafeHTTPClient 返回一个使用 safeDialContext 的 http.Client。
-// 仅供监控模块对外发起请求使用——所有目标都应是公网 endpoint。
+func monitorClientFor(ping bool) *http.Client {
+	t := currentMonitorTuning()
+	fp := fmt.Sprintf("%d|%d|%d|%d", t.RequestTimeoutSeconds, t.ResponseHeaderTimeoutSeconds, t.IdleConnTimeoutSeconds, t.MaxIdleConnsPerHost)
+
+	monitorClientMu.Lock()
+	defer monitorClientMu.Unlock()
+
+	if monitorClientCache == nil || monitorClientFingerprint != fp {
+		monitorClientCache = newSSRFSafeHTTPClientTuned(
+			time.Duration(t.RequestTimeoutSeconds)*time.Second,
+			time.Duration(t.ResponseHeaderTimeoutSeconds)*time.Second,
+			time.Duration(t.IdleConnTimeoutSeconds)*time.Second,
+			t.MaxIdleConnsPerHost,
+		)
+		monitorPingCache = newSSRFSafeHTTPClientTuned(
+			monitorPingTimeout,
+			time.Duration(t.ResponseHeaderTimeoutSeconds)*time.Second,
+			time.Duration(t.IdleConnTimeoutSeconds)*time.Second,
+			t.MaxIdleConnsPerHost,
+		)
+		monitorClientFingerprint = fp
+		slog.Info("channel_monitor: http client rebuilt for new tuning",
+			"request_timeout_s", t.RequestTimeoutSeconds,
+			"response_header_timeout_s", t.ResponseHeaderTimeoutSeconds,
+			"idle_conn_timeout_s", t.IdleConnTimeoutSeconds,
+			"max_idle_conns_per_host", t.MaxIdleConnsPerHost)
+	}
+	if ping {
+		return monitorPingCache
+	}
+	return monitorClientCache
+}
+
+// newSSRFSafeHTTPClient 保留原签名，供既有调用方/测试继续使用。
 func newSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
+	t := currentMonitorTuning()
+	return newSSRFSafeHTTPClientTuned(
+		timeout,
+		time.Duration(t.ResponseHeaderTimeoutSeconds)*time.Second,
+		time.Duration(t.IdleConnTimeoutSeconds)*time.Second,
+		t.MaxIdleConnsPerHost,
+	)
+}
+
+// newSSRFSafeHTTPClientTuned 返回一个使用 safeDialContext 的 http.Client。
+// 仅供监控模块对外发起请求使用——所有目标都应是公网 endpoint。
+//
+// 关键：MaxIdleConnsPerHost 必须显式设置。Go 默认只有 2，而channel monitor 的
+// 全部渠道通常指向同一个 host，默认值会让绝大多数探测都走新建连接（TCP+TLS+
+// HTTP/2 握手 + 上游预热），把冷启动延迟误记成渠道故障。
+func newSSRFSafeHTTPClientTuned(timeout, responseHeaderTimeout, idleConnTimeout time.Duration, maxIdlePerHost int) *http.Client {
+	if maxIdlePerHost < 1 {
+		maxIdlePerHost = ChannelMonitorMaxIdleConnsPerHostDefault
+	}
 	tr := &http.Transport{
 		DialContext:           safeDialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          16,
-		IdleConnTimeout:       monitorIdleConnTimeout,
+		MaxIdleConns:          maxIdlePerHost * 4,
+		MaxIdleConnsPerHost:   maxIdlePerHost,
+		IdleConnTimeout:       idleConnTimeout,
 		TLSHandshakeTimeout:   monitorTLSHandshakeTimeout,
-		ResponseHeaderTimeout: monitorResponseHeaderTimeout,
+		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
 	return &http.Client{Timeout: timeout, Transport: servertiming.WrapRoundTripper(tr)}
 }
@@ -139,7 +231,7 @@ func pingEndpointOrigin(ctx context.Context, endpoint string) *int {
 		return nil
 	}
 	start := time.Now()
-	resp, err := monitorPingHTTPClient.Do(req)
+	resp, err := monitorPingHTTPClient().Do(req)
 	if err != nil {
 		return nil
 	}
@@ -543,7 +635,7 @@ func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers ma
 		req.Header.Set(k, v)
 	}
 
-	resp, err := monitorHTTPClient.Do(req)
+	resp, err := monitorHTTPClient().Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("do request: %w", err)
 	}

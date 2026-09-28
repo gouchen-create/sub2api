@@ -29,11 +29,107 @@ const (
 // ChannelMonitorHandler 渠道监控管理后台 handler。
 type ChannelMonitorHandler struct {
 	monitorService *service.ChannelMonitorService
+	// settingService 用于读写 V1 主动探测的调优参数（并发/超时/连接保活）。
+	settingService *service.SettingService
 }
 
 // NewChannelMonitorHandler 创建 handler。
-func NewChannelMonitorHandler(monitorService *service.ChannelMonitorService) *ChannelMonitorHandler {
-	return &ChannelMonitorHandler{monitorService: monitorService}
+func NewChannelMonitorHandler(monitorService *service.ChannelMonitorService, settingService *service.SettingService) *ChannelMonitorHandler {
+	return &ChannelMonitorHandler{monitorService: monitorService, settingService: settingService}
+}
+
+// --- 探测调优（V1 主动探测）---
+
+// channelMonitorTuningRequest 探测调优的可写字段。全部可选：
+// 未传或传 0 表示"沿用默认值"，越界值会被夹到合法范围。
+type channelMonitorTuningRequest struct {
+	WorkerConcurrency            *int `json:"worker_concurrency"`
+	ResponseHeaderTimeoutSeconds *int `json:"response_header_timeout_seconds"`
+	IdleConnTimeoutSeconds       *int `json:"idle_conn_timeout_seconds"`
+	MaxIdleConnsPerHost          *int `json:"max_idle_conns_per_host"`
+	RequestTimeoutSeconds        *int `json:"request_timeout_seconds"`
+}
+
+type channelMonitorTuningResponse struct {
+	service.ChannelMonitorTuning
+	// Limits 回传各项允许范围，前端据此渲染输入框约束，避免前后端约束漂移。
+	Limits map[string][2]int `json:"limits"`
+	// EffectiveImmediatelySeconds 提示改完多久生效（runner 每次触发时重读配置）。
+	EffectiveImmediatelySeconds int `json:"effective_immediately_seconds"`
+}
+
+func channelMonitorTuningLimits() map[string][2]int {
+	return map[string][2]int{
+		"worker_concurrency":               {service.ChannelMonitorWorkerConcurrencyMin, service.ChannelMonitorWorkerConcurrencyMax},
+		"response_header_timeout_seconds":  {service.ChannelMonitorResponseHeaderTimeoutMin, service.ChannelMonitorResponseHeaderTimeoutMax},
+		"idle_conn_timeout_seconds":        {service.ChannelMonitorIdleConnTimeoutMin, service.ChannelMonitorIdleConnTimeoutMax},
+		"max_idle_conns_per_host":          {service.ChannelMonitorMaxIdleConnsPerHostMin, service.ChannelMonitorMaxIdleConnsPerHostMax},
+		"request_timeout_seconds":          {service.ChannelMonitorRequestTimeoutMin, service.ChannelMonitorRequestTimeoutMax},
+	}
+}
+
+// GetTuning 返回当前生效的探测调优参数。
+func (h *ChannelMonitorHandler) GetTuning(c *gin.Context) {
+	if h.settingService == nil {
+		response.Success(c, channelMonitorTuningResponse{
+			ChannelMonitorTuning: service.DefaultChannelMonitorTuning(),
+			Limits:               channelMonitorTuningLimits(),
+		})
+		return
+	}
+	response.Success(c, channelMonitorTuningResponse{
+		ChannelMonitorTuning:        h.settingService.GetChannelMonitorTuning(c.Request.Context()),
+		Limits:                      channelMonitorTuningLimits(),
+		EffectiveImmediatelySeconds: 60,
+	})
+}
+
+// UpdateTuning 校验并保存探测调优参数；越界值自动夹到范围边界后返回最终值。
+func (h *ChannelMonitorHandler) UpdateTuning(c *gin.Context) {
+	if h.settingService == nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("SETTING_UNAVAILABLE", "setting service is unavailable"))
+		return
+	}
+	var req channelMonitorTuningRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("INVALID_TUNING_PAYLOAD", "invalid request body: "+err.Error()))
+		return
+	}
+
+	cur := h.settingService.GetChannelMonitorTuning(c.Request.Context())
+	next := cur
+	if req.WorkerConcurrency != nil {
+		next.WorkerConcurrency = *req.WorkerConcurrency
+	}
+	if req.ResponseHeaderTimeoutSeconds != nil {
+		next.ResponseHeaderTimeoutSeconds = *req.ResponseHeaderTimeoutSeconds
+	}
+	if req.IdleConnTimeoutSeconds != nil {
+		next.IdleConnTimeoutSeconds = *req.IdleConnTimeoutSeconds
+	}
+	if req.MaxIdleConnsPerHost != nil {
+		next.MaxIdleConnsPerHost = *req.MaxIdleConnsPerHost
+	}
+	if req.RequestTimeoutSeconds != nil {
+		next.RequestTimeoutSeconds = *req.RequestTimeoutSeconds
+	}
+
+	saved, err := h.settingService.SetChannelMonitorTuning(c.Request.Context(), next)
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("TUNING_SAVE_FAILED", err.Error()))
+		return
+	}
+	slog.Info("channel_monitor: tuning updated by admin",
+		"worker_concurrency", saved.WorkerConcurrency,
+		"response_header_timeout_s", saved.ResponseHeaderTimeoutSeconds,
+		"idle_conn_timeout_s", saved.IdleConnTimeoutSeconds,
+		"max_idle_conns_per_host", saved.MaxIdleConnsPerHost,
+		"request_timeout_s", saved.RequestTimeoutSeconds)
+	response.Success(c, channelMonitorTuningResponse{
+		ChannelMonitorTuning:        saved,
+		Limits:                      channelMonitorTuningLimits(),
+		EffectiveImmediatelySeconds: 60,
+	})
 }
 
 // --- Request / Response ---

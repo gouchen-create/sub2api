@@ -172,6 +172,7 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 		PrimaryModel:     normalizeMonitorPrimaryModel(p.Provider, checkMode, p.PrimaryModel),
 		ExtraModels:      normalizeModels(p.ExtraModels),
 		GroupName:        strings.TrimSpace(p.GroupName),
+		SortOrder:        normalizeSortOrder(p.SortOrder),
 		Enabled:          p.Enabled,
 		IntervalSeconds:  p.IntervalSeconds,
 		JitterSeconds:    p.JitterSeconds,
@@ -942,6 +943,9 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 	}
 	if p.GroupName != nil {
 		existing.GroupName = strings.TrimSpace(*p.GroupName)
+	}
+	if p.SortOrder != nil {
+		existing.SortOrder = normalizeSortOrder(*p.SortOrder)
 	}
 	if p.Enabled != nil {
 		existing.Enabled = *p.Enabled

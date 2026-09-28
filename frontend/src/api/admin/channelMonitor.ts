@@ -75,6 +75,7 @@ export interface ChannelMonitor {
   primary_model: string
   extra_models: string[]
   group_name: string
+  sort_order: number
   enabled: boolean
   interval_seconds: number
   /** 每次调度在 interval 基础上 ± [0, jitter] 的随机偏移（秒），0 = 固定间隔 */
@@ -143,6 +144,7 @@ export interface CreateParams {
   primary_model: string
   extra_models?: string[]
   group_name?: string
+  sort_order?: number
   enabled?: boolean
   interval_seconds: number
   jitter_seconds?: number
@@ -213,6 +215,36 @@ export async function list(
  */
 export async function get(id: number): Promise<ChannelMonitor> {
   const { data } = await apiClient.get<ChannelMonitor>(`/admin/channel-monitors/${id}`)
+  return data
+}
+
+/**
+ * V1 主动探测的调优参数（并发/超时/连接保活）。
+ * 改动后由 runner 在下一次触发时重读，约 60 秒内生效，无需重启服务。
+ */
+export interface MonitorTuning {
+  worker_concurrency: number
+  response_header_timeout_seconds: number
+  idle_conn_timeout_seconds: number
+  max_idle_conns_per_host: number
+  request_timeout_seconds: number
+}
+
+export interface MonitorTuningResponse extends MonitorTuning {
+  /** 各项允许范围 [min, max]，由后端下发以保证前后端约束一致。 */
+  limits?: Record<string, [number, number]>
+  effective_immediately_seconds?: number
+}
+
+/** 读取当前生效的探测调优参数。 */
+export async function getTuning(): Promise<MonitorTuningResponse> {
+  const { data } = await apiClient.get<MonitorTuningResponse>('/admin/channel-monitors/tuning')
+  return data
+}
+
+/** 保存探测调优参数；越界值会被后端夹到合法范围，返回值是最终生效值。 */
+export async function updateTuning(params: Partial<MonitorTuning>): Promise<MonitorTuningResponse> {
+  const { data } = await apiClient.put<MonitorTuningResponse>('/admin/channel-monitors/tuning', params)
   return data
 }
 

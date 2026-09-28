@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alitto/pond/v2"
@@ -63,6 +64,10 @@ type ChannelMonitorRunner struct {
 	// 防止单次检测耗时 > interval 时同一 monitor 被并发执行。
 	inFlight   map[int64]struct{}
 	inFlightMu sync.Mutex
+
+	// activeWorkers 当前在跑的探测数。pool 容量固定为允许的最大并发，
+	// 真正的并发上限由 activeWorkers 与运行时配置共同把关，使后台改并发可即时生效。
+	activeWorkers atomic.Int64
 }
 
 // scheduledMonitor 单个监控的运行时上下文。
@@ -104,7 +109,7 @@ func newChannelMonitorRunner(svc monitorRunnerSvc, settingService *SettingServic
 	return &ChannelMonitorRunner{
 		svc:            svc,
 		settingService: settingService,
-		pool:           pond.NewPool(monitorWorkerConcurrency),
+		pool:           pond.NewPool(ChannelMonitorWorkerConcurrencyMax),
 		parentCtx:      ctx,
 		parentCancel:   cancel,
 		tasks:          make(map[int64]*scheduledMonitor),
@@ -255,27 +260,75 @@ func (r *ChannelMonitorRunner) runScheduled(ctx context.Context, task *scheduled
 }
 
 // fire 提交一次检测到 worker 池。功能开关关闭时跳过本次（不取消任务，
-// 重新启用时立即恢复）；池满或重复在飞时也跳过。
+// 重新启用时立即恢复）；超过当前并发上限或重复在飞时也跳过。
+//
+// 【可调优】并发上限不再取自固定常量：每次 fire 都重读 ChannelMonitorRuntime，
+// 因此管理员在后台把并发从 5 改到 10 后，无需重启进程，下一次触发即按新值执行。
 func (r *ChannelMonitorRunner) fire(ctx context.Context, task *scheduledMonitor) {
+	tuning := DefaultChannelMonitorTuning()
 	if r.settingService != nil {
 		rt := r.settingService.GetChannelMonitorRuntime(ctx)
 		if !rt.ActiveProbesAllowed() {
 			return
 		}
+		// 把本次生效的超时/保活参数推给 checker，供其按需重建 http client。
+		tuning = ChannelMonitorTuning{
+			WorkerConcurrency:            rt.WorkerConcurrency,
+			ResponseHeaderTimeoutSeconds: int(rt.ResponseHeaderTimeout / time.Second),
+			IdleConnTimeoutSeconds:       int(rt.IdleConnTimeout / time.Second),
+			MaxIdleConnsPerHost:          rt.MaxIdleConnsPerHost,
+			RequestTimeoutSeconds:        int(rt.RequestTimeout / time.Second),
+		}
 	}
+	tuning = NormalizeChannelMonitorTuning(tuning)
+	ApplyMonitorTuning(tuning)
+
+	// 并发闸门：pool 容量固定为允许的最大值，实际并发由这里按当前配置把关。
+	// 超限时直接跳过本轮（而非排队等待）——调度器每 interval 会再次触发，
+	// 排队只会让"上次检测时间"失真。
+	if !r.tryAcquireWorkerSlot(tuning.WorkerConcurrency) {
+		slog.Debug("channel_monitor: worker concurrency reached, skip this round",
+			"monitor_id", task.id, "name", task.name, "limit", tuning.WorkerConcurrency)
+		return
+	}
+
 	if !r.tryAcquireInFlight(task.id) {
+		r.releaseWorkerSlot()
 		slog.Debug("channel_monitor: skip already in-flight",
 			"monitor_id", task.id, "name", task.name)
 		return
 	}
 	if _, ok := r.pool.TrySubmit(func() {
+		defer r.releaseWorkerSlot()
 		r.runOne(task.id, task.name)
 	}); !ok {
-		// 池满：丢弃本次检测，但必须释放已占用的 inFlight 槽，否则该 monitor 会被永久卡住。
+		// 池满：丢弃本次检测，但必须释放已占用的槽，否则该 monitor 会被永久卡住。
+		r.releaseWorkerSlot()
 		r.releaseInFlight(task.id)
 		slog.Warn("channel_monitor: worker pool full, skip submission",
 			"monitor_id", task.id, "name", task.name)
 	}
+}
+
+// tryAcquireWorkerSlot 在不超过 limit 的前提下占用一个并发槽。
+func (r *ChannelMonitorRunner) tryAcquireWorkerSlot(limit int) bool {
+	if limit < 1 {
+		limit = ChannelMonitorWorkerConcurrencyDefault
+	}
+	for {
+		cur := r.activeWorkers.Load()
+		if int(cur) >= limit {
+			return false
+		}
+		if r.activeWorkers.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+// releaseWorkerSlot 释放并发槽。
+func (r *ChannelMonitorRunner) releaseWorkerSlot() {
+	r.activeWorkers.Add(-1)
 }
 
 // tryAcquireInFlight 原子地占用 monitor 的 in-flight 槽。
