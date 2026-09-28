@@ -27,8 +27,6 @@ const (
 	// 用于限制首次上线回填（30 天）+ 少量余量，避免长事务。
 	monitorMaintenanceMaxDaysPerRun = 35
 	// monitorWorkerConcurrency 调度器并发执行的监控数（pond 池容量）。
-	monitorWorkerConcurrency = 5
-	// monitorStartupLoadTimeout Start 时一次性加载所有 enabled monitor 的总超时。
 	monitorStartupLoadTimeout = 10 * time.Second
 	// monitorMinIntervalSeconds / monitorMaxIntervalSeconds 用户配置的检测间隔上下限。
 	monitorMinIntervalSeconds = 15
@@ -134,12 +132,8 @@ const (
 	monitorRunOneBuffer = 10 * time.Second
 
 	// monitorIdleConnTimeout HTTP transport 空闲连接关闭超时。
-	monitorIdleConnTimeout = 30 * time.Second
-	// monitorTLSHandshakeTimeout HTTP transport TLS 握手超时。
 	monitorTLSHandshakeTimeout = 10 * time.Second
 	// monitorResponseHeaderTimeout HTTP transport 等待响应头超时。
-	monitorResponseHeaderTimeout = 30 * time.Second
-	// monitorPingDiscardMaxBytes ping 时丢弃响应体的最大字节数。
 	monitorPingDiscardMaxBytes = 1024
 
 	// monitorDialTimeout 自定义 dialer 单次连接超时。

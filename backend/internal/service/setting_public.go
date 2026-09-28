@@ -458,11 +458,11 @@ type ChannelMonitorRuntime struct {
 
 // ChannelMonitorTuning 是探测调优参数的可写快照，供管理员端读写。
 type ChannelMonitorTuning struct {
-	WorkerConcurrency             int `json:"worker_concurrency"`
-	ResponseHeaderTimeoutSeconds  int `json:"response_header_timeout_seconds"`
-	IdleConnTimeoutSeconds        int `json:"idle_conn_timeout_seconds"`
-	MaxIdleConnsPerHost           int `json:"max_idle_conns_per_host"`
-	RequestTimeoutSeconds         int `json:"request_timeout_seconds"`
+	WorkerConcurrency            int `json:"worker_concurrency"`
+	ResponseHeaderTimeoutSeconds int `json:"response_header_timeout_seconds"`
+	IdleConnTimeoutSeconds       int `json:"idle_conn_timeout_seconds"`
+	MaxIdleConnsPerHost          int `json:"max_idle_conns_per_host"`
+	RequestTimeoutSeconds        int `json:"request_timeout_seconds"`
 }
 
 // DefaultChannelMonitorTuning 返回出厂默认值。
@@ -533,11 +533,11 @@ func (s *SettingService) SetChannelMonitorTuning(ctx context.Context, t ChannelM
 	}
 	out := NormalizeChannelMonitorTuning(t)
 	if err := s.settingRepo.SetMultiple(ctx, map[string]string{
-		SettingKeyChannelMonitorWorkerConcurrency:             strconv.Itoa(out.WorkerConcurrency),
-		SettingKeyChannelMonitorResponseHeaderTimeoutSeconds:  strconv.Itoa(out.ResponseHeaderTimeoutSeconds),
-		SettingKeyChannelMonitorIdleConnTimeoutSeconds:        strconv.Itoa(out.IdleConnTimeoutSeconds),
-		SettingKeyChannelMonitorMaxIdleConnsPerHost:           strconv.Itoa(out.MaxIdleConnsPerHost),
-		SettingKeyChannelMonitorRequestTimeoutSeconds:         strconv.Itoa(out.RequestTimeoutSeconds),
+		SettingKeyChannelMonitorWorkerConcurrency:            strconv.Itoa(out.WorkerConcurrency),
+		SettingKeyChannelMonitorResponseHeaderTimeoutSeconds: strconv.Itoa(out.ResponseHeaderTimeoutSeconds),
+		SettingKeyChannelMonitorIdleConnTimeoutSeconds:       strconv.Itoa(out.IdleConnTimeoutSeconds),
+		SettingKeyChannelMonitorMaxIdleConnsPerHost:          strconv.Itoa(out.MaxIdleConnsPerHost),
+		SettingKeyChannelMonitorRequestTimeoutSeconds:        strconv.Itoa(out.RequestTimeoutSeconds),
 	}); err != nil {
 		return out, fmt.Errorf("persist channel monitor tuning: %w", err)
 	}

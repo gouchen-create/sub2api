@@ -27,9 +27,9 @@ import (
 // 当前生效参数，monitorHTTPClient() 按参数指纹懒重建 client，因此管理员在后台
 // 改完超时/保活参数后无需重启进程即可生效。
 var (
-	monitorClientMu    sync.Mutex
-	monitorClientCache *http.Client
-	monitorPingCache   *http.Client
+	monitorClientMu          sync.Mutex
+	monitorClientCache       *http.Client
+	monitorPingCache         *http.Client
 	monitorClientFingerprint string
 )
 
@@ -98,16 +98,6 @@ func monitorClientFor(ping bool) *http.Client {
 }
 
 // newSSRFSafeHTTPClient 保留原签名，供既有调用方/测试继续使用。
-func newSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
-	t := currentMonitorTuning()
-	return newSSRFSafeHTTPClientTuned(
-		timeout,
-		time.Duration(t.ResponseHeaderTimeoutSeconds)*time.Second,
-		time.Duration(t.IdleConnTimeoutSeconds)*time.Second,
-		t.MaxIdleConnsPerHost,
-	)
-}
-
 // newSSRFSafeHTTPClientTuned 返回一个使用 safeDialContext 的 http.Client。
 // 仅供监控模块对外发起请求使用——所有目标都应是公网 endpoint。
 //

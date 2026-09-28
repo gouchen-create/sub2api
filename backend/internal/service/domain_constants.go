@@ -538,13 +538,13 @@ const (
 	ChannelMonitorIdleConnTimeoutMax           = 7200
 	// ChannelMonitorIdleConnTimeoutDefault 由 30 秒提高到 1800 秒：60 秒探测间隔下，
 	// 30 秒保活会让连接在两次探测之间全部过期，逼出上游冷启动。
-	ChannelMonitorIdleConnTimeoutDefault   = 1800
-	ChannelMonitorMaxIdleConnsPerHostMin   = 1
-	ChannelMonitorMaxIdleConnsPerHostMax   = 200
+	ChannelMonitorIdleConnTimeoutDefault     = 1800
+	ChannelMonitorMaxIdleConnsPerHostMin     = 1
+	ChannelMonitorMaxIdleConnsPerHostMax     = 200
 	ChannelMonitorMaxIdleConnsPerHostDefault = 16
-	ChannelMonitorRequestTimeoutMin        = 10
-	ChannelMonitorRequestTimeoutMax        = 600
-	ChannelMonitorRequestTimeoutDefault    = 45
+	ChannelMonitorRequestTimeoutMin          = 10
+	ChannelMonitorRequestTimeoutMax          = 600
+	ChannelMonitorRequestTimeoutDefault      = 45
 
 	// SettingKeyChannelMonitorHideThroughput hides RPM/TPM (and similar absolute
 	// throughput rates) from non-admin user-facing monitor APIs and UI, so users

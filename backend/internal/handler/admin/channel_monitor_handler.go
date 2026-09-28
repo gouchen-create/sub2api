@@ -60,11 +60,11 @@ type channelMonitorTuningResponse struct {
 
 func channelMonitorTuningLimits() map[string][2]int {
 	return map[string][2]int{
-		"worker_concurrency":               {service.ChannelMonitorWorkerConcurrencyMin, service.ChannelMonitorWorkerConcurrencyMax},
-		"response_header_timeout_seconds":  {service.ChannelMonitorResponseHeaderTimeoutMin, service.ChannelMonitorResponseHeaderTimeoutMax},
-		"idle_conn_timeout_seconds":        {service.ChannelMonitorIdleConnTimeoutMin, service.ChannelMonitorIdleConnTimeoutMax},
-		"max_idle_conns_per_host":          {service.ChannelMonitorMaxIdleConnsPerHostMin, service.ChannelMonitorMaxIdleConnsPerHostMax},
-		"request_timeout_seconds":          {service.ChannelMonitorRequestTimeoutMin, service.ChannelMonitorRequestTimeoutMax},
+		"worker_concurrency":              {service.ChannelMonitorWorkerConcurrencyMin, service.ChannelMonitorWorkerConcurrencyMax},
+		"response_header_timeout_seconds": {service.ChannelMonitorResponseHeaderTimeoutMin, service.ChannelMonitorResponseHeaderTimeoutMax},
+		"idle_conn_timeout_seconds":       {service.ChannelMonitorIdleConnTimeoutMin, service.ChannelMonitorIdleConnTimeoutMax},
+		"max_idle_conns_per_host":         {service.ChannelMonitorMaxIdleConnsPerHostMin, service.ChannelMonitorMaxIdleConnsPerHostMax},
+		"request_timeout_seconds":         {service.ChannelMonitorRequestTimeoutMin, service.ChannelMonitorRequestTimeoutMax},
 	}
 }
 
