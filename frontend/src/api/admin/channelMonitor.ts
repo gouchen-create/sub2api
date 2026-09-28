@@ -26,6 +26,7 @@ export interface ChannelMonitor {
   primary_model: string
   extra_models: string[]
   group_name: string
+  sort_order: number
   enabled: boolean
   interval_seconds: number
   /** 每次调度在 interval 基础上 ± [0, jitter] 的随机偏移（秒），0 = 固定间隔 */
@@ -80,6 +81,7 @@ export interface CreateParams {
   primary_model: string
   extra_models?: string[]
   group_name?: string
+  sort_order?: number
   enabled?: boolean
   interval_seconds: number
   jitter_seconds?: number

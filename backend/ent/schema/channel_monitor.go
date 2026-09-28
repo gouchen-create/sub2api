@@ -58,6 +58,9 @@ func (ChannelMonitor) Fields() []ent.Field {
 			Optional().
 			Default("").
 			MaxLen(100),
+		field.Int("sort_order").
+			Default(1000).
+			Comment("Display order for admin/user lists; smaller values appear first"),
 		field.Bool("enabled").
 			Default(true),
 		field.Int("interval_seconds").
@@ -111,6 +114,7 @@ func (ChannelMonitor) Edges() []ent.Edge {
 func (ChannelMonitor) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("enabled", "last_checked_at"),
+		index.Fields("sort_order"),
 		index.Fields("provider"),
 		index.Fields("provider", "api_mode"),
 		index.Fields("group_name"),

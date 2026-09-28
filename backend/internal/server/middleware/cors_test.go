@@ -149,6 +149,47 @@ func TestCORS_PreflightAllowedOrigin_ReturnsNoContent(t *testing.T) {
 		"允许的 origin 的 preflight 请求应返回 204")
 }
 
+func TestCORS_ProviderPricingAllowsHvoyFetchPreflight(t *testing.T) {
+	cfg := config.CORSConfig{
+		AllowedOrigins:   []string{"https://allowed.example.com"},
+		AllowCredentials: false,
+	}
+	middleware := CORS(cfg)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodOptions, "/api/provider/pricing", nil)
+	c.Request.Header.Set("Origin", "https://hvoy.ai")
+	c.Request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	c.Request.Header.Set("Access-Control-Request-Headers", "x-hvoy-ts,x-hvoy-sign")
+
+	middleware(c)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, "https://hvoy.ai", w.Header().Get("Access-Control-Allow-Origin"))
+	assert.Contains(t, w.Header().Get("Access-Control-Allow-Headers"), "X-Hvoy-Ts")
+	assert.Contains(t, w.Header().Get("Access-Control-Allow-Headers"), "X-Hvoy-Sign")
+}
+
+func TestCORS_HvoyOriginOnlyAllowedForProviderPricing(t *testing.T) {
+	cfg := config.CORSConfig{
+		AllowedOrigins:   []string{"https://allowed.example.com"},
+		AllowCredentials: false,
+	}
+	middleware := CORS(cfg)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodOptions, "/api/keys", nil)
+	c.Request.Header.Set("Origin", "https://hvoy.ai")
+	c.Request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+
+	middleware(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
+}
+
 func TestCORS_WildcardOrigin_AllowsAny(t *testing.T) {
 	cfg := config.CORSConfig{
 		AllowedOrigins:   []string{"*"},

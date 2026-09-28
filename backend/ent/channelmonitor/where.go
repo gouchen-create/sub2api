@@ -95,6 +95,11 @@ func GroupName(v string) predicate.ChannelMonitor {
 	return predicate.ChannelMonitor(sql.FieldEQ(FieldGroupName, v))
 }
 
+// SortOrder applies equality check predicate on the "sort_order" field. It's identical to SortOrderEQ.
+func SortOrder(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldEQ(FieldSortOrder, v))
+}
+
 // Enabled applies equality check predicate on the "enabled" field. It's identical to EnabledEQ.
 func Enabled(v bool) predicate.ChannelMonitor {
 	return predicate.ChannelMonitor(sql.FieldEQ(FieldEnabled, v))
@@ -628,6 +633,46 @@ func GroupNameEqualFold(v string) predicate.ChannelMonitor {
 // GroupNameContainsFold applies the ContainsFold predicate on the "group_name" field.
 func GroupNameContainsFold(v string) predicate.ChannelMonitor {
 	return predicate.ChannelMonitor(sql.FieldContainsFold(FieldGroupName, v))
+}
+
+// SortOrderEQ applies the EQ predicate on the "sort_order" field.
+func SortOrderEQ(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldEQ(FieldSortOrder, v))
+}
+
+// SortOrderNEQ applies the NEQ predicate on the "sort_order" field.
+func SortOrderNEQ(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldNEQ(FieldSortOrder, v))
+}
+
+// SortOrderIn applies the In predicate on the "sort_order" field.
+func SortOrderIn(vs ...int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldIn(FieldSortOrder, vs...))
+}
+
+// SortOrderNotIn applies the NotIn predicate on the "sort_order" field.
+func SortOrderNotIn(vs ...int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldNotIn(FieldSortOrder, vs...))
+}
+
+// SortOrderGT applies the GT predicate on the "sort_order" field.
+func SortOrderGT(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldGT(FieldSortOrder, v))
+}
+
+// SortOrderGTE applies the GTE predicate on the "sort_order" field.
+func SortOrderGTE(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldGTE(FieldSortOrder, v))
+}
+
+// SortOrderLT applies the LT predicate on the "sort_order" field.
+func SortOrderLT(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldLT(FieldSortOrder, v))
+}
+
+// SortOrderLTE applies the LTE predicate on the "sort_order" field.
+func SortOrderLTE(v int) predicate.ChannelMonitor {
+	return predicate.ChannelMonitor(sql.FieldLTE(FieldSortOrder, v))
 }
 
 // EnabledEQ applies the EQ predicate on the "enabled" field.

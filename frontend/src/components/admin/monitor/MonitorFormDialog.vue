@@ -104,6 +104,12 @@
       </div>
 
       <div>
+        <label class="input-label">{{ t('admin.channelMonitor.form.sortOrder') }}</label>
+        <input v-model.number="form.sort_order" type="number" min="1" class="input" />
+        <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.sortOrderHint') }}</p>
+      </div>
+
+      <div>
         <label class="input-label">{{ t('admin.channelMonitor.form.intervalSeconds') }} <span class="text-red-500">*</span></label>
         <input v-model.number="form.interval_seconds" type="number" min="15" max="3600" required class="input" />
         <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.intervalSecondsHint') }}</p>
@@ -259,6 +265,7 @@ interface MonitorForm {
   primary_model: string
   extra_models: string[]
   group_name: string
+  sort_order: number
   interval_seconds: number
   jitter_seconds: number
   enabled: boolean
@@ -278,6 +285,7 @@ const form = reactive<MonitorForm>({
   primary_model: '',
   extra_models: [],
   group_name: '',
+  sort_order: 1000,
   interval_seconds: systemDefaultInterval.value,
   jitter_seconds: 0,
   enabled: true,
@@ -429,6 +437,7 @@ function resetForm() {
   form.primary_model = ''
   form.extra_models = []
   form.group_name = ''
+  form.sort_order = 1000
   form.interval_seconds = systemDefaultInterval.value
   form.jitter_seconds = 0
   form.enabled = true
@@ -449,6 +458,7 @@ function loadFromMonitor(m: ChannelMonitor) {
   form.primary_model = m.primary_model
   form.extra_models = [...(m.extra_models || [])]
   form.group_name = m.group_name || ''
+  form.sort_order = m.sort_order || 1000
   form.interval_seconds = m.interval_seconds || systemDefaultInterval.value
   form.jitter_seconds = m.jitter_seconds || 0
   form.enabled = m.enabled
@@ -515,6 +525,7 @@ function buildPayload(): CreateParams {
     primary_model: form.primary_model.trim(),
     extra_models: form.extra_models,
     group_name: form.group_name.trim(),
+    sort_order: form.sort_order,
     enabled: form.enabled,
     interval_seconds: form.interval_seconds,
     jitter_seconds: form.jitter_seconds || 0,

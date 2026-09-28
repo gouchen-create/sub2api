@@ -44,6 +44,8 @@ const (
 	// monitorChallengeMin / monitorChallengeMax challenge 操作数范围。
 	monitorChallengeMin = 1
 	monitorChallengeMax = 50
+	// monitorDefaultSortOrder 新建监控默认展示顺序，数值越小越靠前。
+	monitorDefaultSortOrder = 1000
 
 	// providerOpenAIPath OpenAI Chat Completions 路径。
 	providerOpenAIPath = "/v1/chat/completions"

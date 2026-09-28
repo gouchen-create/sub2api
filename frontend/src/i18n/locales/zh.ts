@@ -1145,8 +1145,8 @@ export default {
       imageOutputPrice: '图片输出',
       perRequestPrice: '每次请求',
       intervals: '阶梯定价',
-      unitPerMillion: '/ 1M token',
-      unitPerRequest: '/ 次'
+      unitPerMillion: '元 / 1M token',
+      unitPerRequest: '元 / 次'
     }
   },
 
@@ -2513,8 +2513,8 @@ export default {
         imageOutputPrice: '图片输出',
         perRequestPrice: '每次请求',
         intervals: '阶梯定价',
-        unitPerMillion: '/ 1M token',
-        unitPerRequest: '/ 次'
+        unitPerMillion: '元 / 1M token',
+        unitPerRequest: '元 / 次'
       }
     },
 
@@ -2969,6 +2969,7 @@ export default {
         name: '名称',
         provider: '供应商',
         primaryModel: '主模型',
+        sortOrder: '展示顺序',
         availability7d: '7 天可用率',
         latency: '延迟 (ms)',
         enabled: '启用',
@@ -2999,6 +3000,8 @@ export default {
         extraModelsPlaceholder: '回车添加附加模型',
         groupName: '分组名称',
         groupNamePlaceholder: '可选，用于在用户视图中聚合显示',
+        sortOrder: '展示顺序',
+        sortOrderHint: '数字越小越靠前，默认值为 1000',
         intervalSeconds: '检测间隔 (秒)',
         intervalSecondsHint: '范围：15 - 3600 秒',
         jitterSeconds: '随机抖动 (± 秒)',

@@ -2249,6 +2249,41 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_key").Exists())
 }
 
+func TestDetectOpenAIResponsesCompactBodySignalMarksLargeCodexPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+
+	body := []byte(fmt.Sprintf(
+		`{"model":"gpt-5.6-sol","stream":true,"prompt_cache_key":"session-old","input":[{"type":"input_text","text":%q}]}`,
+		strings.Repeat("x", openAIResponsesAutoCompactMinBodyBytes),
+	))
+
+	detected, reason := DetectOpenAIResponsesCompactBodySignal(c, body)
+	require.True(t, detected)
+	require.Equal(t, "large_codex_prompt_cache_body", reason)
+
+	MarkOpenAIResponsesCompactBodySignal(c, reason)
+	require.True(t, isOpenAIResponsesCompactPath(c))
+	require.Equal(t, "/compact", openAIResponsesRequestPathSuffix(c))
+}
+
+func TestDetectOpenAIResponsesCompactBodySignalSkipsSmallPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+
+	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"prompt_cache_key":"session-new","input":[{"type":"input_text","text":"hello"}]}`)
+
+	detected, reason := DetectOpenAIResponsesCompactBodySignal(c, body)
+	require.False(t, detected)
+	require.Empty(t, reason)
+}
+
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

@@ -35,6 +35,10 @@
             <MonitorPrimaryModelCell :row="row" />
           </template>
 
+          <template #cell-sort_order="{ row }">
+            <span class="text-sm text-gray-900 dark:text-gray-100">{{ row.sort_order }}</span>
+          </template>
+
           <template #cell-availability_7d="{ row }">
             <span class="text-sm text-gray-900 dark:text-gray-100">{{ formatAvailability(row) }}</span>
           </template>
@@ -175,6 +179,7 @@ const columns = computed<Column[]>(() => [
   { key: 'name', label: t('admin.channelMonitor.columns.name'), sortable: false },
   { key: 'provider', label: t('admin.channelMonitor.columns.provider'), sortable: false },
   { key: 'primary_model', label: t('admin.channelMonitor.columns.primaryModel'), sortable: false },
+  { key: 'sort_order', label: t('admin.channelMonitor.columns.sortOrder'), sortable: false },
   { key: 'availability_7d', label: t('admin.channelMonitor.columns.availability7d'), sortable: false },
   { key: 'latency', label: t('admin.channelMonitor.columns.latency'), sortable: false },
   { key: 'enabled', label: t('admin.channelMonitor.columns.enabled'), sortable: false },

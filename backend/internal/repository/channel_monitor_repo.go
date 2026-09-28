@@ -43,6 +43,7 @@ func (r *channelMonitorRepository) Create(ctx context.Context, m *service.Channe
 		SetPrimaryModel(m.PrimaryModel).
 		SetExtraModels(emptySliceIfNil(m.ExtraModels)).
 		SetGroupName(m.GroupName).
+		SetSortOrder(m.SortOrder).
 		SetEnabled(m.Enabled).
 		SetIntervalSeconds(m.IntervalSeconds).
 		SetJitterSeconds(m.JitterSeconds).
@@ -87,6 +88,7 @@ func (r *channelMonitorRepository) Update(ctx context.Context, m *service.Channe
 		SetPrimaryModel(m.PrimaryModel).
 		SetExtraModels(emptySliceIfNil(m.ExtraModels)).
 		SetGroupName(m.GroupName).
+		SetSortOrder(m.SortOrder).
 		SetEnabled(m.Enabled).
 		SetIntervalSeconds(m.IntervalSeconds).
 		SetJitterSeconds(m.JitterSeconds).
@@ -150,7 +152,7 @@ func (r *channelMonitorRepository) List(ctx context.Context, params service.Chan
 	}
 
 	rows, err := q.
-		Order(dbent.Desc(channelmonitor.FieldID)).
+		Order(dbent.Asc(channelmonitor.FieldSortOrder), dbent.Asc(channelmonitor.FieldID)).
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		All(ctx)
@@ -718,6 +720,7 @@ func entToServiceMonitor(row *dbent.ChannelMonitor) *service.ChannelMonitor {
 		PrimaryModel:     row.PrimaryModel,
 		ExtraModels:      extras,
 		GroupName:        row.GroupName,
+		SortOrder:        row.SortOrder,
 		Enabled:          row.Enabled,
 		IntervalSeconds:  row.IntervalSeconds,
 		JitterSeconds:    row.JitterSeconds,

@@ -2922,6 +2922,8 @@ export default {
         extraModelsPlaceholder: 'Press Enter to add extra model',
         groupName: 'Group Name',
         groupNamePlaceholder: 'Optional, used to group rows in user view',
+        sortOrder: 'Display Order',
+        sortOrderHint: 'Smaller numbers appear first; default is 1000',
         intervalSeconds: 'Interval (seconds)',
         intervalSecondsHint: 'Range: 15 - 3600 seconds',
         jitterSeconds: 'Random Jitter (± seconds)',

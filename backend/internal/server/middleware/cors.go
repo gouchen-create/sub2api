@@ -12,6 +12,12 @@ import (
 
 var corsWarningOnce sync.Once
 
+var providerPricingCORSOrigins = map[string]struct{}{
+	"https://docs.hvoy.ai": {},
+	"https://hvoy.ai":      {},
+	"https://www.hvoy.ai":  {},
+}
+
 // CORS 跨域中间件
 func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	allowedOrigins := normalizeOrigins(cfg.AllowedOrigins)
@@ -53,6 +59,7 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	allowHeaders := []string{
 		"Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization",
 		"accept", "origin", "Cache-Control", "X-Requested-With", "X-API-Key",
+		"X-Hvoy-Ts", "X-Hvoy-Sign",
 	}
 	// OpenAI Node SDK 会发送 x-stainless-* 请求头，需在 CORS 中显式放行。
 	openAIProperties := []string{
@@ -69,6 +76,9 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 		originAllowed := allowAll
 		if origin != "" && !allowAll {
 			_, originAllowed = allowedSet[origin]
+			if !originAllowed && isProviderPricingCORSOrigin(c.Request.URL.Path, origin) {
+				originAllowed = true
+			}
 		}
 
 		if originAllowed {
@@ -98,6 +108,14 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isProviderPricingCORSOrigin(path string, origin string) bool {
+	if path != "/api/provider/pricing" {
+		return false
+	}
+	_, ok := providerPricingCORSOrigins[origin]
+	return ok
 }
 
 func normalizeOrigins(values []string) []string {

@@ -9137,6 +9137,8 @@ type ChannelMonitorMutation struct {
 	extra_models            *[]string
 	appendextra_models      []string
 	group_name              *string
+	sort_order              *int
+	addsort_order           *int
 	enabled                 *bool
 	interval_seconds        *int
 	addinterval_seconds     *int
@@ -9646,6 +9648,62 @@ func (m *ChannelMonitorMutation) GroupNameCleared() bool {
 func (m *ChannelMonitorMutation) ResetGroupName() {
 	m.group_name = nil
 	delete(m.clearedFields, channelmonitor.FieldGroupName)
+}
+
+// SetSortOrder sets the "sort_order" field.
+func (m *ChannelMonitorMutation) SetSortOrder(i int) {
+	m.sort_order = &i
+	m.addsort_order = nil
+}
+
+// SortOrder returns the value of the "sort_order" field in the mutation.
+func (m *ChannelMonitorMutation) SortOrder() (r int, exists bool) {
+	v := m.sort_order
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSortOrder returns the old "sort_order" field's value of the ChannelMonitor entity.
+// If the ChannelMonitor object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ChannelMonitorMutation) OldSortOrder(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSortOrder is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSortOrder requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSortOrder: %w", err)
+	}
+	return oldValue.SortOrder, nil
+}
+
+// AddSortOrder adds i to the "sort_order" field.
+func (m *ChannelMonitorMutation) AddSortOrder(i int) {
+	if m.addsort_order != nil {
+		*m.addsort_order += i
+	} else {
+		m.addsort_order = &i
+	}
+}
+
+// AddedSortOrder returns the value that was added to the "sort_order" field in this mutation.
+func (m *ChannelMonitorMutation) AddedSortOrder() (r int, exists bool) {
+	v := m.addsort_order
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSortOrder resets all changes to the "sort_order" field.
+func (m *ChannelMonitorMutation) ResetSortOrder() {
+	m.sort_order = nil
+	m.addsort_order = nil
 }
 
 // SetEnabled sets the "enabled" field.
@@ -10253,7 +10311,7 @@ func (m *ChannelMonitorMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ChannelMonitorMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 20)
 	if m.created_at != nil {
 		fields = append(fields, channelmonitor.FieldCreatedAt)
 	}
@@ -10283,6 +10341,9 @@ func (m *ChannelMonitorMutation) Fields() []string {
 	}
 	if m.group_name != nil {
 		fields = append(fields, channelmonitor.FieldGroupName)
+	}
+	if m.sort_order != nil {
+		fields = append(fields, channelmonitor.FieldSortOrder)
 	}
 	if m.enabled != nil {
 		fields = append(fields, channelmonitor.FieldEnabled)
@@ -10339,6 +10400,8 @@ func (m *ChannelMonitorMutation) Field(name string) (ent.Value, bool) {
 		return m.ExtraModels()
 	case channelmonitor.FieldGroupName:
 		return m.GroupName()
+	case channelmonitor.FieldSortOrder:
+		return m.SortOrder()
 	case channelmonitor.FieldEnabled:
 		return m.Enabled()
 	case channelmonitor.FieldIntervalSeconds:
@@ -10386,6 +10449,8 @@ func (m *ChannelMonitorMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldExtraModels(ctx)
 	case channelmonitor.FieldGroupName:
 		return m.OldGroupName(ctx)
+	case channelmonitor.FieldSortOrder:
+		return m.OldSortOrder(ctx)
 	case channelmonitor.FieldEnabled:
 		return m.OldEnabled(ctx)
 	case channelmonitor.FieldIntervalSeconds:
@@ -10483,6 +10548,13 @@ func (m *ChannelMonitorMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetGroupName(v)
 		return nil
+	case channelmonitor.FieldSortOrder:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSortOrder(v)
+		return nil
 	case channelmonitor.FieldEnabled:
 		v, ok := value.(bool)
 		if !ok {
@@ -10554,6 +10626,9 @@ func (m *ChannelMonitorMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *ChannelMonitorMutation) AddedFields() []string {
 	var fields []string
+	if m.addsort_order != nil {
+		fields = append(fields, channelmonitor.FieldSortOrder)
+	}
 	if m.addinterval_seconds != nil {
 		fields = append(fields, channelmonitor.FieldIntervalSeconds)
 	}
@@ -10571,6 +10646,8 @@ func (m *ChannelMonitorMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *ChannelMonitorMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case channelmonitor.FieldSortOrder:
+		return m.AddedSortOrder()
 	case channelmonitor.FieldIntervalSeconds:
 		return m.AddedIntervalSeconds()
 	case channelmonitor.FieldJitterSeconds:
@@ -10586,6 +10663,13 @@ func (m *ChannelMonitorMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *ChannelMonitorMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case channelmonitor.FieldSortOrder:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSortOrder(v)
+		return nil
 	case channelmonitor.FieldIntervalSeconds:
 		v, ok := value.(int)
 		if !ok {
@@ -10690,6 +10774,9 @@ func (m *ChannelMonitorMutation) ResetField(name string) error {
 		return nil
 	case channelmonitor.FieldGroupName:
 		m.ResetGroupName()
+		return nil
+	case channelmonitor.FieldSortOrder:
+		m.ResetSortOrder()
 		return nil
 	case channelmonitor.FieldEnabled:
 		m.ResetEnabled()

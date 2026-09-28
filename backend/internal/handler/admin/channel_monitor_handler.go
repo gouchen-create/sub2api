@@ -44,6 +44,7 @@ type channelMonitorCreateRequest struct {
 	PrimaryModel     string            `json:"primary_model" binding:"required,max=200"`
 	ExtraModels      []string          `json:"extra_models"`
 	GroupName        string            `json:"group_name" binding:"max=100"`
+	SortOrder        int               `json:"sort_order" binding:"omitempty,min=1,max=1000000"`
 	Enabled          *bool             `json:"enabled"`
 	IntervalSeconds  int               `json:"interval_seconds" binding:"required,min=15,max=3600"`
 	JitterSeconds    int               `json:"jitter_seconds" binding:"omitempty,min=0,max=3585"`
@@ -62,6 +63,7 @@ type channelMonitorUpdateRequest struct {
 	PrimaryModel     *string            `json:"primary_model" binding:"omitempty,max=200"`
 	ExtraModels      *[]string          `json:"extra_models"`
 	GroupName        *string            `json:"group_name" binding:"omitempty,max=100"`
+	SortOrder        *int               `json:"sort_order" binding:"omitempty,min=1,max=1000000"`
 	Enabled          *bool              `json:"enabled"`
 	IntervalSeconds  *int               `json:"interval_seconds" binding:"omitempty,min=15,max=3600"`
 	JitterSeconds    *int               `json:"jitter_seconds" binding:"omitempty,min=0,max=3585"`
@@ -83,6 +85,7 @@ type channelMonitorResponse struct {
 	PrimaryModel        string                               `json:"primary_model"`
 	ExtraModels         []string                             `json:"extra_models"`
 	GroupName           string                               `json:"group_name"`
+	SortOrder           int                                  `json:"sort_order"`
 	Enabled             bool                                 `json:"enabled"`
 	IntervalSeconds     int                                  `json:"interval_seconds"`
 	JitterSeconds       int                                  `json:"jitter_seconds"`
@@ -151,6 +154,7 @@ func channelMonitorToResponse(m *service.ChannelMonitor) *channelMonitorResponse
 		PrimaryModel:        m.PrimaryModel,
 		ExtraModels:         extras,
 		GroupName:           m.GroupName,
+		SortOrder:           m.SortOrder,
 		Enabled:             m.Enabled,
 		IntervalSeconds:     m.IntervalSeconds,
 		JitterSeconds:       m.JitterSeconds,
@@ -317,6 +321,7 @@ func (h *ChannelMonitorHandler) Create(c *gin.Context) {
 		PrimaryModel:     req.PrimaryModel,
 		ExtraModels:      req.ExtraModels,
 		GroupName:        req.GroupName,
+		SortOrder:        req.SortOrder,
 		Enabled:          enabled,
 		IntervalSeconds:  req.IntervalSeconds,
 		JitterSeconds:    req.JitterSeconds,
@@ -354,6 +359,7 @@ func (h *ChannelMonitorHandler) Update(c *gin.Context) {
 		PrimaryModel:     req.PrimaryModel,
 		ExtraModels:      req.ExtraModels,
 		GroupName:        req.GroupName,
+		SortOrder:        req.SortOrder,
 		Enabled:          req.Enabled,
 		IntervalSeconds:  req.IntervalSeconds,
 		JitterSeconds:    req.JitterSeconds,
