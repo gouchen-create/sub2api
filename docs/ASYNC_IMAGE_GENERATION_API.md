@@ -4,7 +4,7 @@
 
 ## 基本信息
 
-- API 基础地址：`https://api.xzgc.asia`
+- API 基础地址：`https://api.chenshuapi.com`
 - 创建任务：`POST /v1/images/generations/async`
 - 创建编辑任务：`POST /v1/images/edits/async`
 - 查询任务：`GET /v1/images/tasks/{task_id}`
@@ -20,7 +20,7 @@
 
 ```http
 POST /v1/images/generations/async HTTP/1.1
-Host: api.xzgc.asia
+Host: api.chenshuapi.com
 Authorization: Bearer <SUB2API_API_KEY>
 Content-Type: application/json
 X-Request-ID: <unique-request-id>
@@ -79,7 +79,7 @@ JSON 模式使用远程图片 URL。`images` 至少包含一个 `image_url`，`m
 
 ```http
 POST /v1/images/edits/async HTTP/1.1
-Host: api.xzgc.asia
+Host: api.chenshuapi.com
 Authorization: Bearer <SUB2API_API_KEY>
 Content-Type: application/json
 X-Request-ID: <unique-request-id>
@@ -153,7 +153,7 @@ curl -sS -X POST "$BASE_URL/v1/images/edits/async" \
 
 ```http
 GET /v1/images/tasks/{task_id} HTTP/1.1
-Host: api.xzgc.asia
+Host: api.chenshuapi.com
 Authorization: Bearer <SUB2API_API_KEY>
 ```
 
@@ -243,7 +243,7 @@ $env:SUB2API_API_KEY = "在本机设置的新密钥"
 执行一次创建并轮询：
 
 ```powershell
-$baseUrl = "https://api.xzgc.asia"
+$baseUrl = "https://api.chenshuapi.com"
 $headers = @{
     Authorization  = "Bearer $env:SUB2API_API_KEY"
     "X-Request-ID" = "async-image-$([guid]::NewGuid())"
@@ -306,7 +306,7 @@ curl.exe -4 -fL $imageUrl -o ".\async-image-$taskId.png"
 
 ```bash
 export SUB2API_API_KEY='在本机设置的新密钥'
-export BASE_URL='https://api.xzgc.asia'
+export BASE_URL='https://api.chenshuapi.com'
 
 curl -sS -X POST "$BASE_URL/v1/images/generations/async" \
   -H "Authorization: Bearer $SUB2API_API_KEY" \
@@ -346,7 +346,7 @@ import uuid
 
 import requests
 
-base_url = "https://api.xzgc.asia"
+base_url = "https://api.chenshuapi.com"
 api_key = os.environ["SUB2API_API_KEY"]
 headers = {
     "Authorization": f"Bearer {api_key}",
@@ -448,7 +448,7 @@ print(output_path)
 可以将下面这段直接交给另一个 Codex：
 
 ```text
-使用环境变量 SUB2API_API_KEY 调用 https://api.xzgc.asia 的异步生图服务。
+使用环境变量 SUB2API_API_KEY 调用 https://api.chenshuapi.com 的异步生图服务。
 只允许 POST 一次 /v1/images/generations/async，参数使用 gpt-image-2、n=1、response_format=url，并设置唯一 X-Request-ID。
 从响应的 task_id 或 id 取得任务 ID，每 4 秒 GET /v1/images/tasks/{task_id}。
 只有 status=completed 才下载 result.data[0].url 或 image_url；status=failed 时输出 error；10 分钟超时后保留 task_id 并停止，禁止重新 POST。
