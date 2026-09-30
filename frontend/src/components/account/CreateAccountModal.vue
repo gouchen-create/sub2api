@@ -3532,6 +3532,9 @@
         />
       </div>
 
+      <!-- 智力检测（鹈鹕测试）：与编辑弹窗共用同一组件与提交约定 -->
+      <IntelligenceCheckSettings v-model="intelligenceCheckConfig" />
+
     </form>
 
     <!-- Step 2: OAuth Authorization -->
@@ -3920,7 +3923,8 @@ import type {
   CodexSessionImportMessage,
   OpenAICompactMode,
   OpenAIResponsesMode,
-  OpenAIEndpointCapability
+  OpenAIEndpointCapability,
+  IntelligenceCheckAccountConfig
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3939,6 +3943,7 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import IntelligenceCheckSettings from '@/components/account/IntelligenceCheckSettings.vue'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import {
   applyAntigravityProjectID,
@@ -4014,6 +4019,55 @@ const withUpstreamRequestIdHeader = <T extends Record<string, unknown> | undefin
   const name = upstreamRequestIdHeader.value.trim()
   if (!name) return extra
   return { ...(extra || {}), upstream_request_id_header: name }
+}
+
+// 智力检测（鹈鹕测试）的账号级配置；默认值与编辑弹窗一致：不参与 + 跟随全局。
+const intelligenceCheckConfig = ref<IntelligenceCheckAccountConfig>({
+  enabled: false,
+  intervalMinutes: null,
+  modelId: '',
+  reasoningEffort: '',
+})
+
+// 智力检测：四个值全默认时不写任何 intelligence_check_* 键，保持创建请求与既有账号数据干净；
+// 出现任一覆盖项时才落键，未填写的覆盖项不落键（语义＝跟随全局设置），与编辑弹窗一致。
+const buildIntelligenceCheckExtra = (
+  extra?: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  const enabled = intelligenceCheckConfig.value.enabled
+  const modelId = intelligenceCheckConfig.value.modelId.trim()
+  const reasoningEffort = intelligenceCheckConfig.value.reasoningEffort.trim()
+  const rawInterval = intelligenceCheckConfig.value.intervalMinutes
+  const intervalMinutes = rawInterval != null && rawInterval > 0 ? Math.trunc(rawInterval) : null
+  if (!enabled && intervalMinutes == null && !modelId && !reasoningEffort) {
+    return extra
+  }
+  const next: Record<string, unknown> = { ...(extra || {}) }
+  next.intelligence_check_enabled = enabled
+  if (intervalMinutes != null) {
+    next.intelligence_check_interval_minutes = intervalMinutes
+  } else {
+    delete next.intelligence_check_interval_minutes
+  }
+  if (modelId) {
+    next.intelligence_check_model_id = modelId
+  } else {
+    delete next.intelligence_check_model_id
+  }
+  if (reasoningEffort) {
+    next.intelligence_check_reasoning_effort = reasoningEffort
+  } else {
+    delete next.intelligence_check_reasoning_effort
+  }
+  return next
+}
+
+// 所有创建账号请求的 extra 统一收口点：先写上游请求ID头，再落智力检测的账号级覆盖。
+const finalizeCreateAccountExtra = (
+  extra?: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  const withHeader = withUpstreamRequestIdHeader(extra)
+  return buildIntelligenceCheckExtra(withHeader) ?? withHeader
 }
 
 const baseUrlHint = computed(() => {
@@ -5316,6 +5370,7 @@ const resetForm = () => {
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
+  intelligenceCheckConfig.value = { enabled: false, intervalMinutes: null, modelId: '', reasoningEffort: '' }
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5871,7 +5926,7 @@ const handleSubmit = async () => {
   await doCreateAccount({
     ...form,
     group_ids: form.group_ids,
-    extra: withUpstreamRequestIdHeader(extra),
+    extra: finalizeCreateAccountExtra(extra),
     upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
@@ -5934,7 +5989,7 @@ const createAccountAndFinish = async (
     return
   }
   // Inject quota limits for apikey/bedrock accounts
-  let finalExtra = withUpstreamRequestIdHeader(extra)
+  let finalExtra = finalizeCreateAccountExtra(extra)
   if (type === 'apikey' || type === 'bedrock') {
     const quotaExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
@@ -6060,7 +6115,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
           platform: 'grok',
           type: 'oauth',
           credentials,
-          extra: withUpstreamRequestIdHeader(extra),
+          extra: finalizeCreateAccountExtra(extra),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,
@@ -6135,7 +6190,8 @@ const handleGrokImportSSO = async (ssoInput: string) => {
       priority: form.priority,
       rate_multiplier: form.rate_multiplier,
       expires_at: form.expires_at,
-      auto_pause_on_expired: autoPauseOnExpired.value
+      auto_pause_on_expired: autoPauseOnExpired.value,
+      extra: finalizeCreateAccountExtra(undefined)
     })
 
     const successCount = result.created?.length || 0
@@ -6237,7 +6293,7 @@ const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
           platform: 'grok',
           type: 'oauth',
           credentials,
-          extra: withUpstreamRequestIdHeader(extra),
+          extra: finalizeCreateAccountExtra(extra),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,
@@ -6336,7 +6392,7 @@ const handleOpenAIExchange = async (authCode: string) => {
         platform: 'openai',
         type: 'oauth',
         credentials,
-        extra: withUpstreamRequestIdHeader(extra),
+        extra: finalizeCreateAccountExtra(extra),
         proxy_id: form.proxy_id,
         concurrency: form.concurrency,
         load_factor: form.load_factor ?? undefined,
@@ -6451,7 +6507,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
       expires_at: form.expires_at,
       auto_pause_on_expired: autoPauseOnExpired.value,
       credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
-      extra: withUpstreamRequestIdHeader(extra),
+      extra: finalizeCreateAccountExtra(extra),
       update_existing: true
     })
 
@@ -6529,7 +6585,7 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
       expires_at: form.expires_at,
       auto_pause_on_expired: autoPauseOnExpired.value,
       credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
-      extra: withUpstreamRequestIdHeader(extra)
+      extra: finalizeCreateAccountExtra(extra)
     })
 
     appStore.showSuccess(t('admin.accounts.accountCreated'))
@@ -6617,7 +6673,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
             platform: 'openai',
             type: 'oauth',
             credentials,
-            extra: withUpstreamRequestIdHeader(extra),
+            extra: finalizeCreateAccountExtra(extra),
             proxy_id: form.proxy_id,
             concurrency: form.concurrency,
             load_factor: form.load_factor ?? undefined,
@@ -6716,7 +6772,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           platform: 'antigravity',
           type: 'oauth',
           credentials,
-          extra: withUpstreamRequestIdHeader({}),
+          extra: finalizeCreateAccountExtra({}),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,
@@ -7097,7 +7153,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           platform: form.platform,
           type: addMethod.value, // Use addMethod as type: 'oauth' or 'setup-token'
           credentials,
-          extra: withUpstreamRequestIdHeader(extra),
+          extra: finalizeCreateAccountExtra(extra),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,
