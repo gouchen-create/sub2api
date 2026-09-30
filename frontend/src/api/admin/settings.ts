@@ -746,6 +746,21 @@ export interface SystemSettings {
   channel_monitor_show_quota?: boolean;
   channel_monitor_hide_user_ranking?: boolean;
 
+  // 智力检测（鹈鹕测试）全局配置
+  intelligence_check_enabled: boolean;
+  intelligence_check_interval_minutes: number;
+  intelligence_check_model_id: string;
+  intelligence_check_reasoning_effort: string;
+  intelligence_check_max_concurrency: number;
+  intelligence_check_run_retry_count: number;
+  intelligence_check_run_retry_interval_seconds: number;
+  intelligence_check_account_retry_count: number;
+  intelligence_check_account_retry_interval_minutes: number;
+  intelligence_check_timeout_seconds: number;
+  intelligence_check_max_tokens: number;
+  intelligence_check_max_runs_per_account: number;
+  intelligence_check_status_sync_enabled: boolean;
+
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
@@ -756,6 +771,8 @@ export interface SystemSettings {
   model_plaza_enabled: boolean;
   model_plaza_require_auth: boolean;
   model_plaza_description: string;
+  // Model Plaza Pro（模型广场 / 渠道状态 V2 / 可用渠道 融合页）开关，默认关闭
+  model_plaza_pro_enabled?: boolean;
   plugin_management_enabled: boolean;
 
   // Affiliate (邀请返利) feature switch
@@ -1054,6 +1071,21 @@ export interface UpdateSettingsRequest {
   channel_monitor_show_quota?: boolean;
   channel_monitor_hide_user_ranking?: boolean;
 
+  // 智力检测（鹈鹕测试）全局配置
+  intelligence_check_enabled?: boolean;
+  intelligence_check_interval_minutes?: number;
+  intelligence_check_model_id?: string;
+  intelligence_check_reasoning_effort?: string;
+  intelligence_check_max_concurrency?: number;
+  intelligence_check_run_retry_count?: number;
+  intelligence_check_run_retry_interval_seconds?: number;
+  intelligence_check_account_retry_count?: number;
+  intelligence_check_account_retry_interval_minutes?: number;
+  intelligence_check_timeout_seconds?: number;
+  intelligence_check_max_tokens?: number;
+  intelligence_check_max_runs_per_account?: number;
+  intelligence_check_status_sync_enabled?: boolean;
+
   // Available Channels feature switch
   available_channels_enabled?: boolean;
 
@@ -1064,6 +1096,8 @@ export interface UpdateSettingsRequest {
   model_plaza_enabled?: boolean;
   model_plaza_require_auth?: boolean;
   model_plaza_description?: string;
+  // Model Plaza Pro（融合页）开关
+  model_plaza_pro_enabled?: boolean;
   plugin_management_enabled?: boolean;
 
   // Affiliate (邀请返利) feature switch

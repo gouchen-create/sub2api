@@ -392,6 +392,21 @@ const (
 	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
 	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
 
+	// 智力检测（鹈鹕测试）全局配置
+	SettingKeyIntelligenceCheckEnabled              = "intelligence_check_enabled"                    // 功能总开关（关闭后不再定时跑测）
+	SettingKeyIntelligenceCheckIntervalMinutes      = "intelligence_check_interval_minutes"           // 全局跑测间隔（分钟）
+	SettingKeyIntelligenceCheckModelID              = "intelligence_check_model_id"                   // 全局跑测模型（留空则跳过跑测）
+	SettingKeyIntelligenceCheckReasoningEffort      = "intelligence_check_reasoning_effort"           // 全局思考强度（留空走上游默认）
+	SettingKeyIntelligenceCheckMaxConcurrency       = "intelligence_check_max_concurrency"            // 定时跑测并发上限
+	SettingKeyIntelligenceCheckRunRetryCount        = "intelligence_check_run_retry_count"            // 单次跑测失败后的重试次数
+	SettingKeyIntelligenceCheckRunRetryIntervalSecs = "intelligence_check_run_retry_interval_seconds" // 单次跑测重试间隔（秒）
+	SettingKeyIntelligenceCheckAccountRetryCount    = "intelligence_check_account_retry_count"        // 账号连续失败后的自动恢复尝试次数
+	SettingKeyIntelligenceCheckAccountRetryMinutes  = "intelligence_check_account_retry_interval_minutes"
+	SettingKeyIntelligenceCheckTimeoutSeconds       = "intelligence_check_timeout_seconds"      // 单次跑测超时（秒）
+	SettingKeyIntelligenceCheckMaxTokens            = "intelligence_check_max_tokens"           // 单次跑测最大输出 token
+	SettingKeyIntelligenceCheckMaxRunsPerAccount    = "intelligence_check_max_runs_per_account" // 每账号保留的跑测记录条数
+	SettingKeyIntelligenceCheckStatusSyncEnabled    = "intelligence_check_status_sync_enabled"  // 评审结论是否联动账号状态
+
 	// 默认配置
 	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量
 	SettingKeyDefaultBalance       = "default_balance"        // 新用户默认余额
@@ -594,6 +609,11 @@ const (
 	// (public group/model pricing showcase). When false: the plaza endpoint returns 404
 	// and the header entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyModelPlazaEnabled = "model_plaza_enabled"
+
+	// SettingKeyModelPlazaProEnabled is a DB-backed soft switch for the "Model Plaza Pro"
+	// experience layered on the Model Plaza page. Defaults to false (opt-in feature),
+	// mirroring SettingKeyModelPlazaEnabled.
+	SettingKeyModelPlazaProEnabled = "model_plaza_pro_enabled"
 
 	// SettingKeyModelPlazaRequireAuth controls whether the Model Plaza page requires a
 	// logged-in user. When false the page is public and anonymous visitors see only

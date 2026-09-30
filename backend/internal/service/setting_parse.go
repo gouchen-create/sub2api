@@ -193,6 +193,23 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyChannelMonitorShowQuota:              "false",
 		SettingKeyChannelMonitorHideUserRanking:        "false",
 
+		// 智力检测（鹈鹕测试）默认值：总开关关闭、间隔 12 小时、模型留空（留空即不跑）。
+		// 这张表只在 settings 表为空时写入一次，所以代码侧必须自己兜底
+		// （见 IntelligenceCheckGlobalSettings），否则老库升级后会读到零值。
+		SettingKeyIntelligenceCheckEnabled:              "false",
+		SettingKeyIntelligenceCheckIntervalMinutes:      "720",
+		SettingKeyIntelligenceCheckModelID:              "",
+		SettingKeyIntelligenceCheckReasoningEffort:      "",
+		SettingKeyIntelligenceCheckMaxConcurrency:       "2",
+		SettingKeyIntelligenceCheckRunRetryCount:        "2",
+		SettingKeyIntelligenceCheckRunRetryIntervalSecs: "30",
+		SettingKeyIntelligenceCheckAccountRetryCount:    "3",
+		SettingKeyIntelligenceCheckAccountRetryMinutes:  "10",
+		SettingKeyIntelligenceCheckTimeoutSeconds:       "180",
+		SettingKeyIntelligenceCheckMaxTokens:            "32000",
+		SettingKeyIntelligenceCheckMaxRunsPerAccount:    "20",
+		SettingKeyIntelligenceCheckStatusSyncEnabled:    "false",
+
 		// Grok compatibility defaults: cross-client mapping stays enabled unless
 		// operators explicitly disable it.
 		SettingKeyGrokDefaultTextModel:           "grok-4.6",
@@ -207,6 +224,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Model plaza feature (default disabled; opt-in, public unless require_auth)
 		SettingKeyModelPlazaEnabled:       "false",
+		SettingKeyModelPlazaProEnabled:    "false",
 		SettingKeyModelPlazaRequireAuth:   "false",
 		SettingKeyModelPlazaDescription:   "",
 		SettingKeyPluginManagementEnabled: "false",
@@ -813,6 +831,67 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.ChannelMonitorShowQuota = settings[SettingKeyChannelMonitorShowQuota] == "true"
 	result.ChannelMonitorHideUserRanking = isTrueSettingValue(settings[SettingKeyChannelMonitorHideUserRanking])
 
+	// 智力检测（鹈鹕测试）全局配置：默认值表只在建库时写一次，
+	// 老库升级后这些键并不存在，所以这里每个数值都要自己兜底。
+	result.IntelligenceCheckEnabled = isTrueSettingValue(settings[SettingKeyIntelligenceCheckEnabled])
+	result.IntelligenceCheckIntervalMinutes = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckIntervalMinutes],
+		IntelligenceCheckDefaultIntervalMinutes,
+		IntelligenceCheckMinIntervalMinutes,
+		IntelligenceCheckMaxIntervalMinutes,
+	)
+	result.IntelligenceCheckModelID = strings.TrimSpace(settings[SettingKeyIntelligenceCheckModelID])
+	result.IntelligenceCheckReasoningEffort = strings.TrimSpace(settings[SettingKeyIntelligenceCheckReasoningEffort])
+	result.IntelligenceCheckMaxConcurrency = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckMaxConcurrency],
+		IntelligenceCheckDefaultMaxConcurrency,
+		IntelligenceCheckMinMaxConcurrency,
+		IntelligenceCheckMaxMaxConcurrency,
+	)
+	result.IntelligenceCheckRunRetryCount = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckRunRetryCount],
+		IntelligenceCheckDefaultRunRetryCount,
+		0,
+		IntelligenceCheckMaxRunRetryCount,
+	)
+	result.IntelligenceCheckRunRetryIntervalSeconds = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckRunRetryIntervalSecs],
+		IntelligenceCheckDefaultRunRetryIntervalSec,
+		IntelligenceCheckMinRunRetryIntervalSec,
+		IntelligenceCheckMaxRunRetryIntervalSec,
+	)
+	result.IntelligenceCheckAccountRetryCount = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckAccountRetryCount],
+		IntelligenceCheckDefaultAccountRetryCount,
+		0,
+		IntelligenceCheckMaxAccountRetryCount,
+	)
+	result.IntelligenceCheckAccountRetryIntervalMinutes = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckAccountRetryMinutes],
+		IntelligenceCheckDefaultAccountRetryIntervalMin,
+		IntelligenceCheckMinAccountRetryIntervalMin,
+		IntelligenceCheckMaxAccountRetryIntervalMin,
+	)
+	result.IntelligenceCheckTimeoutSeconds = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckTimeoutSeconds],
+		IntelligenceCheckDefaultTimeoutSeconds,
+		IntelligenceCheckMinTimeoutSeconds,
+		IntelligenceCheckMaxTimeoutSeconds,
+	)
+	result.IntelligenceCheckMaxTokens = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckMaxTokens],
+		IntelligenceCheckDefaultMaxTokens,
+		IntelligenceCheckMinMaxTokens,
+		IntelligenceCheckMaxMaxTokens,
+	)
+	result.IntelligenceCheckMaxRunsPerAccount = parseIntelligenceCheckSetting(
+		settings[SettingKeyIntelligenceCheckMaxRunsPerAccount],
+		IntelligenceCheckDefaultMaxRunsPerAccount,
+		IntelligenceCheckMinMaxRunsPerAccount,
+		IntelligenceCheckMaxMaxRunsPerAccount,
+	)
+	result.IntelligenceCheckStatusSyncEnabled = isTrueSettingValue(settings[SettingKeyIntelligenceCheckStatusSyncEnabled])
+
 	// Grok default mapping policy
 	result.GrokDefaultTextModel = strings.TrimSpace(settings[SettingKeyGrokDefaultTextModel])
 	if result.GrokDefaultTextModel == "" {
@@ -831,6 +910,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Model plaza feature (default: disabled; strict true)
 	result.ModelPlazaEnabled = settings[SettingKeyModelPlazaEnabled] == "true"
+	result.ModelPlazaProEnabled = settings[SettingKeyModelPlazaProEnabled] == "true"
 	result.ModelPlazaRequireAuth = settings[SettingKeyModelPlazaRequireAuth] == "true"
 	result.ModelPlazaDescription = settings[SettingKeyModelPlazaDescription]
 	result.PluginManagementEnabled = settings[SettingKeyPluginManagementEnabled] == "true"

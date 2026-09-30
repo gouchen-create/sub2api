@@ -381,6 +381,20 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
 		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
+		IntelligenceCheckEnabled:                     settings.IntelligenceCheckEnabled,
+		IntelligenceCheckIntervalMinutes:             settings.IntelligenceCheckIntervalMinutes,
+		IntelligenceCheckModelID:                     settings.IntelligenceCheckModelID,
+		IntelligenceCheckReasoningEffort:             settings.IntelligenceCheckReasoningEffort,
+		IntelligenceCheckMaxConcurrency:              settings.IntelligenceCheckMaxConcurrency,
+		IntelligenceCheckRunRetryCount:               settings.IntelligenceCheckRunRetryCount,
+		IntelligenceCheckRunRetryIntervalSeconds:     settings.IntelligenceCheckRunRetryIntervalSeconds,
+		IntelligenceCheckAccountRetryCount:           settings.IntelligenceCheckAccountRetryCount,
+		IntelligenceCheckAccountRetryIntervalMinutes: settings.IntelligenceCheckAccountRetryIntervalMinutes,
+		IntelligenceCheckTimeoutSeconds:              settings.IntelligenceCheckTimeoutSeconds,
+		IntelligenceCheckMaxTokens:                   settings.IntelligenceCheckMaxTokens,
+		IntelligenceCheckMaxRunsPerAccount:           settings.IntelligenceCheckMaxRunsPerAccount,
+		IntelligenceCheckStatusSyncEnabled:           settings.IntelligenceCheckStatusSyncEnabled,
+
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
@@ -389,6 +403,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		SubscriptionEnabled:      settings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
+		ModelPlazaProEnabled:    settings.ModelPlazaProEnabled,
 		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
 		PluginManagementEnabled: settings.PluginManagementEnabled,
 		ModelPlazaDescription:   settings.ModelPlazaDescription,
