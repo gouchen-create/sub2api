@@ -34,6 +34,7 @@ type AdminHandlers struct {
 	Plugin                 *admin.PluginHandler
 	APIKey                 *admin.AdminAPIKeyHandler
 	ScheduledTest          *admin.ScheduledTestHandler
+	IntelligenceCheck      *admin.IntelligenceCheckHandler
 	Channel                *admin.ChannelHandler
 	ChannelMonitor         *admin.ChannelMonitorHandler
 	ChannelMonitorTemplate *admin.ChannelMonitorRequestTemplateHandler
@@ -57,6 +58,11 @@ type Handlers struct {
 	Announcement     *AnnouncementHandler
 	ChannelMonitor   *ChannelMonitorUserHandler
 	ChannelMonitorV2 *ChannelMonitorV2Handler
+	// ChannelMonitorV1Matrix V1 主动探测的模型广场 Pro 矩阵（与 V2 matrix 同形，只读）。
+	ChannelMonitorV1Matrix *ChannelMonitorV1MatrixHandler
+	// IntelligenceCheck 智力检测的用户侧只读脱敏接口（管理员走 Admin.IntelligenceCheck）。
+	IntelligenceCheck *IntelligenceCheckPublicHandler
+
 	Admin            *AdminHandlers
 	Gateway          *GatewayHandler
 	OpenAIGateway    *OpenAIGatewayHandler
@@ -69,6 +75,8 @@ type Handlers struct {
 	ModelPlaza       *ModelPlazaHandler
 	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
+	// ProviderPricing 对外公开的价格接口（无鉴权，挂在 /api/v1 之外）
+	ProviderPricing *ProviderPricingHandler
 }
 
 // BuildInfo contains build-time information

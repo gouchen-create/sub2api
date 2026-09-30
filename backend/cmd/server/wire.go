@@ -124,6 +124,8 @@ func provideCleanup(
 	channelMonitorV2Aggregator *service.ChannelMonitorV2Aggregator,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	intelligenceCheckRunner *service.IntelligenceCheckRunnerService,
+	reconciliationCollector *service.ReconciliationCollector,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
@@ -151,6 +153,12 @@ func provideCleanup(
 			{"OpenAIQuotaAutoResetService", func() error {
 				if openAIAutoReset != nil {
 					openAIAutoReset.Stop()
+				}
+				return nil
+			}},
+			{"ReconciliationCollector", func() error {
+				if reconciliationCollector != nil {
+					reconciliationCollector.Stop()
 				}
 				return nil
 			}},
@@ -377,6 +385,12 @@ func provideCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
+				}
+				return nil
+			}},
+			{"IntelligenceCheckRunnerService", func() error {
+				if intelligenceCheckRunner != nil {
+					intelligenceCheckRunner.Stop()
 				}
 				return nil
 			}},

@@ -38,6 +38,7 @@ func ProvideAdminHandlers(
 	pluginHandler *admin.PluginHandler,
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
+	intelligenceCheckHandler *admin.IntelligenceCheckHandler,
 	channelHandler *admin.ChannelHandler,
 	channelMonitorHandler *admin.ChannelMonitorHandler,
 	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
@@ -83,6 +84,7 @@ func ProvideAdminHandlers(
 		Plugin:                 pluginHandler,
 		APIKey:                 apiKeyHandler,
 		ScheduledTest:          scheduledTestHandler,
+		IntelligenceCheck:      intelligenceCheckHandler,
 		Channel:                channelHandler,
 		ChannelMonitor:         channelMonitorHandler,
 		ChannelMonitorTemplate: channelMonitorTemplateHandler,
@@ -186,6 +188,8 @@ func ProvideHandlers(
 	announcementHandler *AnnouncementHandler,
 	channelMonitorUserHandler *ChannelMonitorUserHandler,
 	channelMonitorV2Handler *ChannelMonitorV2Handler,
+	channelMonitorV1MatrixHandler *ChannelMonitorV1MatrixHandler,
+	intelligenceCheckPublicHandler *IntelligenceCheckPublicHandler,
 	adminHandlers *AdminHandlers,
 	gatewayHandler *GatewayHandler,
 	openaiGatewayHandler *OpenAIGatewayHandler,
@@ -198,6 +202,7 @@ func ProvideHandlers(
 	modelPlazaHandler *ModelPlazaHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	providerPricingHandler *ProviderPricingHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 	_ *service.OpenAIQuotaAutoResetService,
@@ -224,11 +229,19 @@ func ProvideHandlers(
 		ModelPlaza:       modelPlazaHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		ProviderPricing:  providerPricingHandler,
+
+		// V1 主动探测的模型广场 Pro 矩阵（与 V2 matrix 同形，只读）。
+		ChannelMonitorV1Matrix: channelMonitorV1MatrixHandler,
+
+		// 智力检测的用户侧只读脱敏接口（管理员侧走 Admin.IntelligenceCheck）。
+		IntelligenceCheck: intelligenceCheckPublicHandler,
 	}
 }
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
+	NewProviderPricingHandler,
 	// Top-level handlers
 	NewAuthHandler,
 	NewUserHandler,
@@ -239,6 +252,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementHandler,
 	NewChannelMonitorUserHandler,
 	NewChannelMonitorV2Handler,
+	NewChannelMonitorV1MatrixHandler,
 	ProvideGatewayHandler,
 	ProvideOpenAIGatewayHandler,
 	NewTotpHandler,
@@ -279,6 +293,8 @@ var ProviderSet = wire.NewSet(
 	admin.NewPluginHandler,
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
+	admin.NewIntelligenceCheckHandler,
+	NewIntelligenceCheckPublicHandler,
 	admin.NewChannelHandler,
 	admin.NewChannelMonitorHandler,
 	admin.NewChannelMonitorRequestTemplateHandler,

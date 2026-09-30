@@ -661,6 +661,17 @@ func ProvideScheduledTestRunnerService(
 	return svc
 }
 
+// ProvideIntelligenceCheckService creates IntelligenceCheckService.
+// accountRepo 与 settingSvc 只为人工评审的账号状态联动服务（见 ReviewRun）。
+func ProvideIntelligenceCheckService(
+	accountTestSvc *AccountTestService,
+	runRepo IntelligenceCheckRunRepository,
+	accountRepo AccountRepository,
+	settingSvc *SettingService,
+) *IntelligenceCheckService {
+	return NewIntelligenceCheckService(accountTestSvc, runRepo, accountRepo, settingSvc)
+}
+
 // ProvideOpsScheduledReportService creates and starts OpsScheduledReportService.
 func ProvideOpsScheduledReportService(
 	opsService *OpsService,
@@ -849,6 +860,17 @@ func ProvideAPIKeyService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	// 经营对账：看板账本、账号规则、A6 客户端与账单来源、配置覆盖、同步与匹配。
+	NewReconciliationLedgerService,
+	NewReconciliationAccountRuleService,
+	NewA6Client,
+	NewReconciliationA6BillSource,
+	ProvideReconciliationA6Config,
+	ProvideReconciliationSyncConfig,
+	ProvideReconciliationA6Settings,
+	ProvideReconciliationSyncService,
+	ProvideReconciliationCollector,
+	ProvideProviderPricingService,
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,
@@ -960,6 +982,8 @@ var ProviderSet = wire.NewSet(
 	ProvideIdempotencyCleanupService,
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
+	ProvideIntelligenceCheckService,
+	ProvideIntelligenceCheckRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
@@ -975,6 +999,10 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelMonitorRunner,
 	NewChannelMonitorQuotaFetcher,
 	ProvideChannelMonitorV2Service,
+	ProvideChannelMonitorV1MatrixService,
+	// V1 矩阵只读视图既要读启用监控清单、又不该引入新的写路径，
+	// 因此把既有的 *ChannelMonitorService 显式绑定到只读接口上。
+	wire.Bind(new(ChannelMonitorV1EnabledMonitorReader), new(*ChannelMonitorService)),
 	ProvideChannelMonitorV2Aggregator,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
@@ -1057,6 +1085,16 @@ func ProvideChannelMonitorV2Service(repo ChannelMonitorV2Repository, settingServ
 	svc := NewChannelMonitorV2Service(repo)
 	svc.SetRuntimeReader(settingService)
 	return svc
+}
+
+// ProvideChannelMonitorV1MatrixService 创建 V1 主动探测的矩阵服务（模型广场 Pro 只读视图）。
+// monitors 复用既有的 *ChannelMonitorService.ListEnabledMonitors，未新增任何查询入口。
+// 仓库实现是 repository.NewChannelMonitorV1MatrixRepository（原生 SQL，只读四张既有表）。
+func ProvideChannelMonitorV1MatrixService(
+	monitors ChannelMonitorV1EnabledMonitorReader,
+	repo ChannelMonitorV1MatrixRepository,
+) *ChannelMonitorV1MatrixService {
+	return NewChannelMonitorV1MatrixService(monitors, repo)
 }
 
 // ProvideChannelMonitorV2Aggregator starts the passive minute-rollup worker.

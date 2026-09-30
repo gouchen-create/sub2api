@@ -65,6 +65,13 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
+	// 经营对账：账本读模型、上游账单、待采集调用、用量快照、账号规则、同步状态。
+	NewReconciliationLedgerRepository,
+	NewReconciliationUpstreamBillRepository,
+	NewReconciliationUsageSourceRepository,
+	NewReconciliationUsageExtraRepository,
+	NewReconciliationAccountRuleRepository,
+	NewReconciliationSyncStateRepository,
 	NewUserRepository,
 	NewAPIKeyRepository,
 	NewGroupRepository,
@@ -72,8 +79,9 @@ var ProviderSet = wire.NewSet(
 	NewCompositeModelRouteRepository,
 	NewAccountRepository,
 	NewAdminAccountRepository,
-	NewScheduledTestPlanRepository,   // 定时测试计划仓储
-	NewScheduledTestResultRepository, // 定时测试结果仓储
+	NewScheduledTestPlanRepository,    // 定时测试计划仓储
+	NewScheduledTestResultRepository,  // 定时测试结果仓储
+	NewIntelligenceCheckRunRepository, // 智力检测跑测记录仓储
 	NewProxyRepository,
 	NewRedeemCodeRepository,
 	NewPromoCodeRepository,
@@ -101,6 +109,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelRepository,
 	NewChannelMonitorRepository,
 	NewChannelMonitorV2Repository,
+	NewChannelMonitorV1MatrixRepository,
 	NewChannelMonitorRequestTemplateRepository,
 	NewContentModerationRepository,
 	NewAffiliateRepository,

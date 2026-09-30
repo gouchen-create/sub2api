@@ -267,6 +267,8 @@ export interface PublicSettings {
   account_quota_notify_enabled: boolean
   balance_low_notify_threshold: number
   channel_monitor_enabled: boolean
+  /** 智力检测作品墙是否对登录用户开放（公开设置只暴露这一个布尔值）。 */
+  intelligence_check_enabled: boolean
   /** Exclusive mode: v1 active probes or v2 passive aggregation. Default v2. */
   channel_monitor_mode?: 'v1' | 'v2'
   channel_monitor_default_interval_seconds: number
@@ -283,6 +285,8 @@ export interface PublicSettings {
   payment_balance_disabled: boolean
   model_plaza_enabled: boolean
   model_plaza_require_auth: boolean
+  /** 模型广场 Pro（模型广场 / 渠道状态 V2 / 可用渠道 融合页）开关。默认关闭。 */
+  model_plaza_pro_enabled?: boolean
   plugin_management_enabled: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
@@ -1138,6 +1142,60 @@ export interface OllamaCloudUsageSnapshot {
   last_error?: string
 }
 
+// 智力检测（鹈鹕测试）的一次跑测记录，对应后端 intelligence_check_runs 一行。
+export interface IntelligenceCheckRun {
+  id: number
+  account_id: number
+  batch_id: string
+  /** manual = 手动触发，schedule = 定时任务触发。 */
+  trigger_source: string
+  model_id: string
+  upstream_model: string
+  reasoning_effort: string
+  prompt_variant: string
+  status: string
+  verdict: string
+  has_html: boolean
+  html_bytes: number
+  latency_ms: number
+  attempt: number
+  error_code: string
+  error_message: string
+  started_at: string
+  finished_at: string | null
+  created_at: string
+}
+
+// 跑测记录列表查询参数。
+export interface IntelligenceCheckListParams {
+  page?: number
+  page_size?: number
+  account_id?: number
+  status?: string
+  verdict?: string
+  model_id?: string
+}
+
+// 手动触发一次跑测的请求体。
+export interface CreateIntelligenceCheckRunRequest {
+  account_id: number
+  model_id?: string
+  reasoning_effort?: string
+  prompt_variant?: string
+}
+
+// 智力检测（鹈鹕测试）的账号级配置，对应 accounts.extra 上的四个键。
+export interface IntelligenceCheckAccountConfig {
+  // 该账号是否参与智力检测。
+  enabled: boolean
+  // 跑测间隔覆盖（分钟）；null 表示跟随全局设置。
+  intervalMinutes: number | null
+  // 跑测模型覆盖；空串表示跟随全局设置。
+  modelId: string
+  // 思考强度覆盖（low / medium / high / xhigh / max 等）；空串表示跟随全局设置。
+  reasoningEffort: string
+}
+
 export interface OllamaCloudUsageState {
   account_id: number
   eligible: boolean
@@ -1216,6 +1274,10 @@ export interface Account {
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
+    // 智力检测（鹈鹕测试）的账号级配置，随账号表单一起保存。
+    intelligence_check_enabled?: boolean
+    intelligence_check_interval_minutes?: number
+    intelligence_check_model_id?: string
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]

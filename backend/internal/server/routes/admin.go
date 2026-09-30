@@ -112,6 +112,9 @@ func RegisterAdminRoutes(
 		// 定时测试计划
 		registerScheduledTestRoutes(admin, h)
 
+		// 智力检测（鹈鹕测试）
+		registerIntelligenceCheckRoutes(admin, h)
+
 		// 渠道管理
 		registerChannelRoutes(admin, h)
 
@@ -131,19 +134,21 @@ func RegisterAdminRoutes(
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
 
-		// 经营对账（Companion 旁路服务代理，仅管理员可访问）
+		// 经营对账（已内置进本进程，仅管理员可访问）
 		registerCompanionRoutes(admin, h)
 	}
 }
 
-// registerCompanionRoutes 注册 Companion 经营对账的只读与同步接口。
+// registerCompanionRoutes 注册经营对账的只读与同步接口。
 //
-// Companion 自身的看板口令保留在服务端环境变量里，浏览器只与本项目的管理员接口交互，
-// 因此 Companion 的独立 Basic 凭据不需要、也不会下发到前端。
+// 这些接口曾经反向代理到独立的 companion 旁路服务，现在直接由本进程的对账服务响应；
+// 路径、方法与响应结构未变，因此管理后台前端无需任何改动。
 func registerCompanionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	companion := admin.Group("/companion")
 	{
 		companion.GET("/status", h.Admin.Companion.Status)
+		companion.GET("/settings", h.Admin.Companion.Settings)
+		companion.PUT("/settings", h.Admin.Companion.UpdateSettings)
 		companion.GET("/summary", h.Admin.Companion.Summary)
 		companion.GET("/timeseries", h.Admin.Companion.Timeseries)
 		companion.GET("/requests", h.Admin.Companion.Requests)
@@ -758,6 +763,18 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	admin.GET("/accounts/:id/scheduled-test-plans", h.Admin.ScheduledTest.ListByAccount)
 }
 
+func registerIntelligenceCheckRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	runs := admin.Group("/intelligence-check/runs")
+	{
+		runs.GET("", h.Admin.IntelligenceCheck.ListRuns)
+		runs.POST("", h.Admin.IntelligenceCheck.CreateRun)
+		runs.GET("/:id", h.Admin.IntelligenceCheck.GetRun)
+		runs.GET("/:id/artifact", h.Admin.IntelligenceCheck.GetArtifact)
+		// 人工评审走 PATCH：只改 verdict / 评审人 / 评审时间，不重跑跑测。
+		runs.PATCH("/:id/review", h.Admin.IntelligenceCheck.ReviewRun)
+	}
+}
+
 func registerErrorPassthroughRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	rules := admin.Group("/error-passthrough-rules")
 	{
@@ -827,6 +844,8 @@ func registerChannelMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers, s
 		monitors.DELETE("/:id", h.Admin.ChannelMonitor.Delete)
 		monitors.POST("/:id/run", h.Admin.ChannelMonitor.Run)
 		monitors.GET("/:id/history", h.Admin.ChannelMonitor.History)
+		// 清空单个监控的全部监控数据（探测明细 + 每日聚合），监控配置本身保持不变。
+		monitors.DELETE("/:id/history", h.Admin.ChannelMonitor.ClearHistory)
 	}
 
 	templates := admin.Group("/channel-monitor-templates")
@@ -897,6 +916,21 @@ func channelMonitorAdminFeatureGuard(settingService *service.SettingService) gin
 			return
 		}
 		response.ErrorFrom(c, service.ErrChannelMonitorDisabled)
+		c.Abort()
+	}
+}
+
+// intelligenceCheckEnabledGuard 要求智力检测总开关已开启。
+// 与管理员侧不同：这里只在功能真正对外开放时才放行，避免功能下线后接口仍能被直接调用。
+func intelligenceCheckEnabledGuard(settingService *service.SettingService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if settingService != nil {
+			if settings, err := settingService.GetIntelligenceCheckGlobalSettings(c.Request.Context()); err == nil && settings.Enabled {
+				c.Next()
+				return
+			}
+		}
+		response.ErrorFrom(c, service.ErrIntelligenceCheckDisabled)
 		c.Abort()
 	}
 }
