@@ -548,6 +548,15 @@ export default {
       deleteSuccess: 'Monitor deleted',
       loadError: 'Failed to load monitors',
       deleteConfirm: 'Are you sure you want to delete monitor "{name}"? This action cannot be undone.',
+      clearData: 'Clear Data',
+      clearing: 'Clearing',
+      clearDataHint:
+        'Erase all monitoring data of this channel (probe history + daily rollups). Its 7-day availability, latency and success rate reset to zero; the monitor config itself is kept.',
+      clearDataConfirm:
+        'Clear all monitoring data of "{name}"? Every probe record and daily rollup of this channel will be deleted, so its availability, latency and success rate reset to zero. This cannot be undone. The monitor itself (endpoint / key / interval / enabled) is not modified — the next probe starts collecting fresh data.',
+      clearDataConfirmButton: 'Clear',
+      clearDataSuccess: 'Cleared: {history} probe records and {rollups} daily rollups removed',
+      clearDataFailed: 'Failed to clear channel data',
       nameRequired: 'Please enter a monitor name',
       primaryModelRequired: 'Please enter a primary model',
       linkedAccountRequired: 'Please select a linked account',

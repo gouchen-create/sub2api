@@ -224,6 +224,12 @@ type ChannelMonitorHistoryEntry struct {
 	Quota         *domain.MonitorQuotaSnapshot
 }
 
+// ChannelMonitorClearResult 一次"清除数据"实际删掉的行数（管理端展示用）。
+type ChannelMonitorClearResult struct {
+	DeletedHistory int64
+	DeletedRollups int64
+}
+
 // ChannelMonitorLatest 最近一次检测的简明信息（用于 UserMonitorView 聚合）。
 type ChannelMonitorLatest struct {
 	Model         string

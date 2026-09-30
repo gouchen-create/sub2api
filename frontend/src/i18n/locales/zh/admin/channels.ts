@@ -548,6 +548,15 @@ export default {
       deleteSuccess: '监控删除成功',
       loadError: '加载监控列表失败',
       deleteConfirm: '确定要删除监控「{name}」吗？此操作不可撤销。',
+      clearData: '清除数据',
+      clearing: '清除中',
+      clearDataHint:
+        '清空该渠道的全部监控数据（探测明细 + 每日汇总），7 天可用率、延迟、成功率会归零；监控自身的配置保留不动。',
+      clearDataConfirm:
+        '确定要清除监控「{name}」的全部监控数据吗？该渠道的所有探测明细与每日汇总都会被删除，可用率、延迟、成功率随即归零，且不可撤销。监控自身的配置（地址 / Key / 检测间隔 / 启用状态）不会被改动，下一次探测会重新开始积累数据。',
+      clearDataConfirmButton: '确认清除',
+      clearDataSuccess: '已清除该渠道数据：探测明细 {history} 条、每日汇总 {rollups} 条',
+      clearDataFailed: '清除渠道数据失败',
       nameRequired: '请输入监控名称',
       primaryModelRequired: '请输入主模型',
       linkedAccountRequired: '请选择关联账号',

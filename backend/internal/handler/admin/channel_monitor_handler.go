@@ -606,6 +606,26 @@ func (h *ChannelMonitorHandler) History(c *gin.Context) {
 	response.Success(c, gin.H{"items": out})
 }
 
+// ClearHistory DELETE /api/v1/admin/channel-monitors/:id/history
+// 清空该监控的全部监控数据（探测明细 + 每日聚合），返回各表删除行数。
+// 只清数据，不动监控配置本身（endpoint / api_key / interval / enabled 全部保留），
+// 清完下一次探测会照常写入，等于把该渠道的可用率与延迟统计重置。
+func (h *ChannelMonitorHandler) ClearHistory(c *gin.Context) {
+	id, ok := ParseChannelMonitorID(c)
+	if !ok {
+		return
+	}
+	result, err := h.monitorService.ClearData(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{
+		"deleted_history": result.DeletedHistory,
+		"deleted_rollups": result.DeletedRollups,
+	})
+}
+
 // parseHistoryLimit 解析 history 接口的 limit query。
 // 使用 service 包的统一上下限常量，避免在 handler 重复定义同名魔法值。
 func parseHistoryLimit(raw string) int {

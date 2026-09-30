@@ -32,6 +32,10 @@ type ChannelMonitorRepository interface {
 	MarkChecked(ctx context.Context, id int64, checkedAt time.Time) error
 	InsertHistoryBatch(ctx context.Context, rows []*ChannelMonitorHistoryRow) error
 	DeleteHistoryBefore(ctx context.Context, before time.Time) (int64, error)
+	// DeleteHistoryByMonitor / DeleteRollupsByMonitor 清空**单个**监控的全部数据，
+	// 供管理端"清除数据"使用（DeleteHistoryBefore / DeleteRollupsBefore 是按时间清全量）。
+	DeleteHistoryByMonitor(ctx context.Context, monitorID int64) (int64, error)
+	DeleteRollupsByMonitor(ctx context.Context, monitorID int64) (int64, error)
 
 	// 历史记录
 	ListHistory(ctx context.Context, monitorID int64, model string, limit int) ([]*ChannelMonitorHistoryEntry, error)
@@ -573,6 +577,30 @@ func (s *ChannelMonitorService) Delete(ctx context.Context, id int64) error {
 		s.scheduler.Unschedule(id)
 	}
 	return nil
+}
+
+// ClearData 清空某个监控的全部监控数据（探测明细 + 每日聚合），返回各表实际删除行数。
+//
+// 语义是"把这个渠道重置回刚建好的状态"：7 天可用率、延迟、成功率、近 N 次明细都会归零。
+// 只删数据、不动监控自身的配置（endpoint / api_key / interval / enabled 全部保留），
+// 所以调度器无需变更，下一次探测会照常写入新数据。
+func (s *ChannelMonitorService) ClearData(ctx context.Context, id int64) (*ChannelMonitorClearResult, error) {
+	if _, err := s.repo.GetByID(ctx, id); err != nil {
+		return nil, err
+	}
+	// 先聚合后明细：两者是派生关系，这个顺序保证任何中断点上都不会出现
+	// "聚合已被清掉、明细还在"之外的中间态，且两次都是幂等的，重试安全。
+	rollups, err := s.repo.DeleteRollupsByMonitor(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("clear channel monitor rollups: %w", err)
+	}
+	history, err := s.repo.DeleteHistoryByMonitor(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("clear channel monitor history: %w", err)
+	}
+	slog.Info("channel_monitor: cleared data",
+		"monitor_id", id, "deleted_history", history, "deleted_rollups", rollups)
+	return &ChannelMonitorClearResult{DeletedHistory: history, DeletedRollups: rollups}, nil
 }
 
 // ListHistory 列出某个监控最近的检测历史。

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/tidwall/gjson"
@@ -691,10 +692,19 @@ var monitorAPIKeyPatterns = []struct {
 	{regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "eyJ***REDACTED.JWT***"},
 }
 
-// sanitizeErrorMessage 擦除错误/响应文本中可能泄露的 API key。
-// 处理两类来源：
-//  1. URL query 中的 ?key= / ?api_key= 等（Go *url.Error 会回填完整 URL）
-//  2. 上游 HTTP body 文本里直接出现的 sk-* / xai-* / AIza* / JWT 等密钥碎片
+// monitorUTF8Replacement 是替换非法 UTF-8 字节用的替换字符（U+FFFD）。
+// 上游响应体可能带着被截断或被污染的字节（Latin-1 错误页、半截 gzip、二进制片段），
+// 而 PostgreSQL 的 text 列会直接拒收含非法 UTF-8 的整批 INSERT。
+const monitorUTF8Replacement = "\uFFFD"
+
+// sanitizeErrorMessage 把错误/响应文本归一化为合法 UTF-8，并擦除可能泄露的 API key。
+// 处理三类来源：
+//  1. 上游响应体里的非法 UTF-8 字节（截断的多字节字符、被污染的错误页）
+//  2. URL query 中的 ?key= / ?api_key= 等（Go *url.Error 会回填完整 URL）
+//  3. 上游 HTTP body 文本里直接出现的 sk-* / xai-* / AIza* / JWT 等密钥碎片
+//
+// 第 1 条必须放在最前面：后面的脱敏与截断都按字节操作，只有先保证文本合法，
+// 后续步骤才不会再次切出半个字符。
 //
 // 注意：与 gemini_messages_compat_service.go 的 sanitizeUpstreamErrorMessage 关注点类似但参数集更广，
 // 监控模块独立维护，避免互相耦合。
@@ -702,6 +712,7 @@ func sanitizeErrorMessage(msg string) string {
 	if msg == "" {
 		return msg
 	}
+	msg = strings.ToValidUTF8(msg, monitorUTF8Replacement)
 	msg = monitorSensitiveQueryParamRegex.ReplaceAllString(msg, `${1}REDACTED`)
 	for _, p := range monitorAPIKeyPatterns {
 		msg = p.pattern.ReplaceAllString(msg, p.replace)
@@ -710,6 +721,10 @@ func sanitizeErrorMessage(msg string) string {
 }
 
 // truncateMessage 把消息按 monitorMessageMaxBytes 截断，避免 DB 列溢出与日志过长。
+//
+// 截断点会回退到完整字符边界（沿用 ops_error_logger / easypay 等处的既有写法）：
+// 按字节硬切会把多字节字符拦腰截断（中文错误文本尤其常见），产出非法 UTF-8，
+// 而 PostgreSQL 会因此拒收整批 INSERT —— 表现为探测点静默丢失。
 func truncateMessage(msg string) string {
 	if len(msg) <= monitorMessageMaxBytes {
 		return msg
@@ -718,6 +733,12 @@ func truncateMessage(msg string) string {
 	cutoff := monitorMessageMaxBytes - len(ellipsis)
 	if cutoff < 0 {
 		cutoff = 0
+	}
+	if cutoff > len(msg) {
+		cutoff = len(msg)
+	}
+	for cutoff > 0 && !utf8.ValidString(msg[:cutoff]) {
+		cutoff--
 	}
 	return msg[:cutoff] + ellipsis
 }

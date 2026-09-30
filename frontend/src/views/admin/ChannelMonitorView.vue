@@ -109,9 +109,11 @@
               :row="row"
               :running="runningId === row.id"
               :duplicating="duplicatingIds.has(row.id)"
+              :clearing="clearingId === row.id"
               @run="handleRunNow"
               @duplicate="handleDuplicate"
               @edit="openEditDialog"
+              @clear="handleClear"
               @delete="handleDelete"
             />
           </template>
@@ -169,6 +171,18 @@
       :danger="true"
       @confirm="confirmDelete"
       @cancel="showDeleteDialog = false"
+    />
+
+    <!-- 清除数据：只删该渠道的监控数据（探测明细 + 每日汇总），监控配置本身保留 -->
+    <ConfirmDialog
+      :show="showClearDialog"
+      :title="t('admin.channelMonitor.clearData')"
+      :message="clearConfirmMessage"
+      :confirm-text="t('admin.channelMonitor.clearDataConfirmButton')"
+      :cancel-text="t('common.cancel')"
+      :danger="true"
+      @confirm="confirmClear"
+      @cancel="showClearDialog = false"
     />
   </AppLayout>
 </template>
@@ -236,6 +250,9 @@ const deleting = ref<ChannelMonitor | null>(null)
 const showRunResult = ref(false)
 const runResults = ref<CheckResult[]>([])
 const duplicatingIds = reactive(new Set<number>())
+const showClearDialog = ref(false)
+const clearingTarget = ref<ChannelMonitor | null>(null)
+const clearingId = ref<number | null>(null)
 
 let abortController: AbortController | null = null
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
@@ -253,6 +270,11 @@ const columns = computed<Column[]>(() => [
 const deleteConfirmMessage = computed(() => {
   const name = deleting.value?.name || ''
   return t('admin.channelMonitor.deleteConfirm', { name })
+})
+
+const clearConfirmMessage = computed(() => {
+  const name = clearingTarget.value?.name || ''
+  return t('admin.channelMonitor.clearDataConfirm', { name })
 })
 
 async function reload() {
@@ -348,6 +370,34 @@ async function handleRunNow(row: ChannelMonitor) {
     appStore.showError(extractApiErrorMessage(err, t('admin.channelMonitor.runFailed')))
   } finally {
     runningId.value = null
+  }
+}
+
+function handleClear(row: ChannelMonitor) {
+  clearingTarget.value = row
+  showClearDialog.value = true
+}
+
+async function confirmClear() {
+  const row = clearingTarget.value
+  showClearDialog.value = false
+  if (!row || clearingId.value != null) return
+  clearingId.value = row.id
+  try {
+    const res = await adminAPI.channelMonitor.clearHistory(row.id)
+    appStore.showSuccess(
+      t('admin.channelMonitor.clearDataSuccess', {
+        history: res.deleted_history,
+        rollups: res.deleted_rollups,
+      }),
+    )
+    // 清空后可用率/延迟会归零，回读一次列表才能看到真实的新状态
+    await reload()
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.channelMonitor.clearDataFailed')))
+  } finally {
+    clearingId.value = null
+    clearingTarget.value = null
   }
 }
 

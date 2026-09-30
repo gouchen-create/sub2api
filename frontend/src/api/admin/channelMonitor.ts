@@ -196,6 +196,12 @@ export interface HistoryResponse {
   items: HistoryItem[]
 }
 
+/** 「清除数据」返回的各表实际删除行数。 */
+export interface ClearHistoryResponse {
+  deleted_history: number
+  deleted_rollups: number
+}
+
 /**
  * List channel monitors with pagination and filters
  */
@@ -377,6 +383,18 @@ export async function listHistory(
   return data
 }
 
+/**
+ * Clear all collected monitoring data for a monitor (probe history + daily rollups).
+ * The monitor's own config (endpoint / api_key / interval / enabled) is untouched, so the
+ * next probe cycle starts writing fresh data — availability and latency go back to zero.
+ */
+export async function clearHistory(id: number): Promise<ClearHistoryResponse> {
+  const { data } = await apiClient.delete<ClearHistoryResponse>(
+    `/admin/channel-monitors/${id}/history`
+  )
+  return data
+}
+
 export const channelMonitorAPI = {
   list,
   get,
@@ -386,6 +404,7 @@ export const channelMonitorAPI = {
   del,
   runNow,
   listHistory,
+  clearHistory,
 }
 
 export default channelMonitorAPI
