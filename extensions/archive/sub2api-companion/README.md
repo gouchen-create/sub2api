@@ -1,3 +1,20 @@
+> # ⚠️ 已归档：本目录不再维护
+>
+> **本扩展的经营对账能力已经收编进 Sub2API 主程序**，不再需要独立容器。
+> 相关能力现在由后端 `backend/internal/service/reconciliation_*.go`、
+> `backend/internal/handler/admin/companion.go` 与迁移
+> `backend/migrations/242_reconciliation_tables.sql` 提供，管理入口仍在
+> 管理后台的「经营对账」页面（接口路径与响应结构未变，前端无需改动）。
+>
+> - **本目录仅作历史参考**：其中的 SQLite 台账、Caddy 日志解析、Subarx 归集等做法
+>   都已被取代，**不要**再基于它做二次开发，也不要按它的部署文档起容器。
+> - 公开价格接口 `GET /api/provider/pricing` 也已迁入主程序（见
+>   `backend/internal/handler/provider_pricing_handler.go`）。
+> - 历史数据**不做迁移**：新账本从切换上线那一刻开始记账。
+> - 旧生产环境的 SQLite 台账文件请单独备份留存，不要导入主库。
+>
+> 需要二开或排查对账问题，请改读 `docs/经营对账 Companion 维护与二开交接.md`。
+
 # Sub2API Companion
 
 独立于 Sub2API 镜像的经营对账与公开价格服务。它不修改 Sub2API 源码、数据库结构或请求链路。
