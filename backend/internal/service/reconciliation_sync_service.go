@@ -631,7 +631,9 @@ func (s *ReconciliationSyncService) TriggerAsync(ctx context.Context) bool {
 	runCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer s.triggerMu.Unlock()
-		s.RunOnce(runCtx)
+		if err := s.RunOnce(runCtx); err != nil {
+			logger.LegacyPrintf("service.reconciliation_sync", "trigger_async_run_failed: err=%v", err)
+		}
 	}()
 	return true
 }
@@ -700,9 +702,4 @@ func DescribeMatchMethod(method string) string {
 	default:
 		return ""
 	}
-}
-
-// formatReconciliationAmount 把金额格式化成接口约定的 8 位小数字符串。
-func formatReconciliationAmount(value float64) string {
-	return decimal.NewFromFloat(value).StringFixed(8)
 }

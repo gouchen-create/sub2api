@@ -48,7 +48,7 @@ func (w *limitedResponseRecorder) Write(p []byte) (int, error) {
 	if w.limit <= 0 {
 		return w.ResponseRecorder.Write(p)
 	}
-	remaining := w.limit - w.ResponseRecorder.Body.Len()
+	remaining := w.limit - w.Body.Len()
 	if remaining <= 0 {
 		w.truncated = true
 		return len(p), nil

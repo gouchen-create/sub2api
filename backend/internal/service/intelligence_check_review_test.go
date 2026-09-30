@@ -34,29 +34,6 @@ func (r *reviewRunRepoStub) UpdateReview(_ context.Context, run *IntelligenceChe
 	return r.updateErr
 }
 
-// reviewAccountRepoStub 是 AccountRepository 的最小测试桩，只实现联动用到的两个方法。
-type reviewAccountRepoStub struct {
-	AccountRepository
-
-	account    *Account
-	getErr     error
-	updateErr  error
-	updateCall int
-}
-
-func (r *reviewAccountRepoStub) GetByID(_ context.Context, _ int64) (*Account, error) {
-	if r.getErr != nil {
-		return nil, r.getErr
-	}
-	return r.account, nil
-}
-
-func (r *reviewAccountRepoStub) Update(_ context.Context, account *Account) error {
-	r.updateCall++
-	r.account = account
-	return r.updateErr
-}
-
 // newReviewService 构造一个只带跑测仓储的评审服务。
 // settingSvc 传 nil 表示联动开关不可用 —— syncAccountStatus 会直接短路，
 // 因此这些用例覆盖的是「评审本身」，不掺入账号状态联动。
