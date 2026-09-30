@@ -31,6 +31,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationaccountrule"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationsyncstate"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationupstreambill"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationusageextra"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/schema"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
@@ -1721,6 +1725,229 @@ func init() {
 	proxyDescExpiryWarnDays := proxyFields[10].Descriptor()
 	// proxy.DefaultExpiryWarnDays holds the default value on creation for the expiry_warn_days field.
 	proxy.DefaultExpiryWarnDays = proxyDescExpiryWarnDays.Default.(int)
+	reconciliationaccountruleMixin := schema.ReconciliationAccountRule{}.Mixin()
+	reconciliationaccountruleMixinFields0 := reconciliationaccountruleMixin[0].Fields()
+	_ = reconciliationaccountruleMixinFields0
+	reconciliationaccountruleFields := schema.ReconciliationAccountRule{}.Fields()
+	_ = reconciliationaccountruleFields
+	// reconciliationaccountruleDescCreatedAt is the schema descriptor for created_at field.
+	reconciliationaccountruleDescCreatedAt := reconciliationaccountruleMixinFields0[0].Descriptor()
+	// reconciliationaccountrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	reconciliationaccountrule.DefaultCreatedAt = reconciliationaccountruleDescCreatedAt.Default.(func() time.Time)
+	// reconciliationaccountruleDescUpdatedAt is the schema descriptor for updated_at field.
+	reconciliationaccountruleDescUpdatedAt := reconciliationaccountruleMixinFields0[1].Descriptor()
+	// reconciliationaccountrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	reconciliationaccountrule.DefaultUpdatedAt = reconciliationaccountruleDescUpdatedAt.Default.(func() time.Time)
+	// reconciliationaccountrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	reconciliationaccountrule.UpdateDefaultUpdatedAt = reconciliationaccountruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// reconciliationaccountruleDescProvider is the schema descriptor for provider field.
+	reconciliationaccountruleDescProvider := reconciliationaccountruleFields[1].Descriptor()
+	// reconciliationaccountrule.DefaultProvider holds the default value on creation for the provider field.
+	reconciliationaccountrule.DefaultProvider = reconciliationaccountruleDescProvider.Default.(string)
+	// reconciliationaccountrule.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	reconciliationaccountrule.ProviderValidator = reconciliationaccountruleDescProvider.Validators[0].(func(string) error)
+	// reconciliationaccountruleDescExternalKey is the schema descriptor for external_key field.
+	reconciliationaccountruleDescExternalKey := reconciliationaccountruleFields[2].Descriptor()
+	// reconciliationaccountrule.DefaultExternalKey holds the default value on creation for the external_key field.
+	reconciliationaccountrule.DefaultExternalKey = reconciliationaccountruleDescExternalKey.Default.(string)
+	// reconciliationaccountrule.ExternalKeyValidator is a validator for the "external_key" field. It is called by the builders before save.
+	reconciliationaccountrule.ExternalKeyValidator = reconciliationaccountruleDescExternalKey.Validators[0].(func(string) error)
+	// reconciliationaccountruleDescVersion is the schema descriptor for version field.
+	reconciliationaccountruleDescVersion := reconciliationaccountruleFields[4].Descriptor()
+	// reconciliationaccountrule.DefaultVersion holds the default value on creation for the version field.
+	reconciliationaccountrule.DefaultVersion = reconciliationaccountruleDescVersion.Default.(int64)
+	// reconciliationaccountruleDescEnabled is the schema descriptor for enabled field.
+	reconciliationaccountruleDescEnabled := reconciliationaccountruleFields[5].Descriptor()
+	// reconciliationaccountrule.DefaultEnabled holds the default value on creation for the enabled field.
+	reconciliationaccountrule.DefaultEnabled = reconciliationaccountruleDescEnabled.Default.(bool)
+	reconciliationsyncstateFields := schema.ReconciliationSyncState{}.Fields()
+	_ = reconciliationsyncstateFields
+	// reconciliationsyncstateDescKey is the schema descriptor for key field.
+	reconciliationsyncstateDescKey := reconciliationsyncstateFields[0].Descriptor()
+	// reconciliationsyncstate.KeyValidator is a validator for the "key" field. It is called by the builders before save.
+	reconciliationsyncstate.KeyValidator = func() func(string) error {
+		validators := reconciliationsyncstateDescKey.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(key string) error {
+			for _, fn := range fns {
+				if err := fn(key); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// reconciliationsyncstateDescValue is the schema descriptor for value field.
+	reconciliationsyncstateDescValue := reconciliationsyncstateFields[1].Descriptor()
+	// reconciliationsyncstate.DefaultValue holds the default value on creation for the value field.
+	reconciliationsyncstate.DefaultValue = reconciliationsyncstateDescValue.Default.(string)
+	// reconciliationsyncstateDescUpdatedAt is the schema descriptor for updated_at field.
+	reconciliationsyncstateDescUpdatedAt := reconciliationsyncstateFields[2].Descriptor()
+	// reconciliationsyncstate.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	reconciliationsyncstate.DefaultUpdatedAt = reconciliationsyncstateDescUpdatedAt.Default.(func() time.Time)
+	// reconciliationsyncstate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	reconciliationsyncstate.UpdateDefaultUpdatedAt = reconciliationsyncstateDescUpdatedAt.UpdateDefault.(func() time.Time)
+	reconciliationupstreambillMixin := schema.ReconciliationUpstreamBill{}.Mixin()
+	reconciliationupstreambillMixinFields0 := reconciliationupstreambillMixin[0].Fields()
+	_ = reconciliationupstreambillMixinFields0
+	reconciliationupstreambillFields := schema.ReconciliationUpstreamBill{}.Fields()
+	_ = reconciliationupstreambillFields
+	// reconciliationupstreambillDescCreatedAt is the schema descriptor for created_at field.
+	reconciliationupstreambillDescCreatedAt := reconciliationupstreambillMixinFields0[0].Descriptor()
+	// reconciliationupstreambill.DefaultCreatedAt holds the default value on creation for the created_at field.
+	reconciliationupstreambill.DefaultCreatedAt = reconciliationupstreambillDescCreatedAt.Default.(func() time.Time)
+	// reconciliationupstreambillDescUpdatedAt is the schema descriptor for updated_at field.
+	reconciliationupstreambillDescUpdatedAt := reconciliationupstreambillMixinFields0[1].Descriptor()
+	// reconciliationupstreambill.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	reconciliationupstreambill.DefaultUpdatedAt = reconciliationupstreambillDescUpdatedAt.Default.(func() time.Time)
+	// reconciliationupstreambill.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	reconciliationupstreambill.UpdateDefaultUpdatedAt = reconciliationupstreambillDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// reconciliationupstreambillDescProvider is the schema descriptor for provider field.
+	reconciliationupstreambillDescProvider := reconciliationupstreambillFields[0].Descriptor()
+	// reconciliationupstreambill.DefaultProvider holds the default value on creation for the provider field.
+	reconciliationupstreambill.DefaultProvider = reconciliationupstreambillDescProvider.Default.(string)
+	// reconciliationupstreambill.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	reconciliationupstreambill.ProviderValidator = reconciliationupstreambillDescProvider.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescUpstreamRequestID is the schema descriptor for upstream_request_id field.
+	reconciliationupstreambillDescUpstreamRequestID := reconciliationupstreambillFields[1].Descriptor()
+	// reconciliationupstreambill.UpstreamRequestIDValidator is a validator for the "upstream_request_id" field. It is called by the builders before save.
+	reconciliationupstreambill.UpstreamRequestIDValidator = func() func(string) error {
+		validators := reconciliationupstreambillDescUpstreamRequestID.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(upstream_request_id string) error {
+			for _, fn := range fns {
+				if err := fn(upstream_request_id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// reconciliationupstreambillDescModel is the schema descriptor for model field.
+	reconciliationupstreambillDescModel := reconciliationupstreambillFields[4].Descriptor()
+	// reconciliationupstreambill.DefaultModel holds the default value on creation for the model field.
+	reconciliationupstreambill.DefaultModel = reconciliationupstreambillDescModel.Default.(string)
+	// reconciliationupstreambill.ModelValidator is a validator for the "model" field. It is called by the builders before save.
+	reconciliationupstreambill.ModelValidator = reconciliationupstreambillDescModel.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescTokenName is the schema descriptor for token_name field.
+	reconciliationupstreambillDescTokenName := reconciliationupstreambillFields[5].Descriptor()
+	// reconciliationupstreambill.DefaultTokenName holds the default value on creation for the token_name field.
+	reconciliationupstreambill.DefaultTokenName = reconciliationupstreambillDescTokenName.Default.(string)
+	// reconciliationupstreambill.TokenNameValidator is a validator for the "token_name" field. It is called by the builders before save.
+	reconciliationupstreambill.TokenNameValidator = reconciliationupstreambillDescTokenName.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescInputTokens is the schema descriptor for input_tokens field.
+	reconciliationupstreambillDescInputTokens := reconciliationupstreambillFields[6].Descriptor()
+	// reconciliationupstreambill.DefaultInputTokens holds the default value on creation for the input_tokens field.
+	reconciliationupstreambill.DefaultInputTokens = reconciliationupstreambillDescInputTokens.Default.(int)
+	// reconciliationupstreambillDescOutputTokens is the schema descriptor for output_tokens field.
+	reconciliationupstreambillDescOutputTokens := reconciliationupstreambillFields[7].Descriptor()
+	// reconciliationupstreambill.DefaultOutputTokens holds the default value on creation for the output_tokens field.
+	reconciliationupstreambill.DefaultOutputTokens = reconciliationupstreambillDescOutputTokens.Default.(int)
+	// reconciliationupstreambillDescCacheReadTokens is the schema descriptor for cache_read_tokens field.
+	reconciliationupstreambillDescCacheReadTokens := reconciliationupstreambillFields[8].Descriptor()
+	// reconciliationupstreambill.DefaultCacheReadTokens holds the default value on creation for the cache_read_tokens field.
+	reconciliationupstreambill.DefaultCacheReadTokens = reconciliationupstreambillDescCacheReadTokens.Default.(int)
+	// reconciliationupstreambillDescCacheCreationTokens is the schema descriptor for cache_creation_tokens field.
+	reconciliationupstreambillDescCacheCreationTokens := reconciliationupstreambillFields[9].Descriptor()
+	// reconciliationupstreambill.DefaultCacheCreationTokens holds the default value on creation for the cache_creation_tokens field.
+	reconciliationupstreambill.DefaultCacheCreationTokens = reconciliationupstreambillDescCacheCreationTokens.Default.(int)
+	// reconciliationupstreambillDescCacheTokensTotal is the schema descriptor for cache_tokens_total field.
+	reconciliationupstreambillDescCacheTokensTotal := reconciliationupstreambillFields[10].Descriptor()
+	// reconciliationupstreambill.DefaultCacheTokensTotal holds the default value on creation for the cache_tokens_total field.
+	reconciliationupstreambill.DefaultCacheTokensTotal = reconciliationupstreambillDescCacheTokensTotal.Default.(int)
+	// reconciliationupstreambillDescCostOriginal is the schema descriptor for cost_original field.
+	reconciliationupstreambillDescCostOriginal := reconciliationupstreambillFields[11].Descriptor()
+	// reconciliationupstreambill.DefaultCostOriginal holds the default value on creation for the cost_original field.
+	reconciliationupstreambill.DefaultCostOriginal = reconciliationupstreambillDescCostOriginal.Default.(float64)
+	// reconciliationupstreambillDescCurrency is the schema descriptor for currency field.
+	reconciliationupstreambillDescCurrency := reconciliationupstreambillFields[12].Descriptor()
+	// reconciliationupstreambill.DefaultCurrency holds the default value on creation for the currency field.
+	reconciliationupstreambill.DefaultCurrency = reconciliationupstreambillDescCurrency.Default.(string)
+	// reconciliationupstreambill.CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
+	reconciliationupstreambill.CurrencyValidator = reconciliationupstreambillDescCurrency.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescFxRateToCny is the schema descriptor for fx_rate_to_cny field.
+	reconciliationupstreambillDescFxRateToCny := reconciliationupstreambillFields[13].Descriptor()
+	// reconciliationupstreambill.DefaultFxRateToCny holds the default value on creation for the fx_rate_to_cny field.
+	reconciliationupstreambill.DefaultFxRateToCny = reconciliationupstreambillDescFxRateToCny.Default.(float64)
+	// reconciliationupstreambillDescCostCny is the schema descriptor for cost_cny field.
+	reconciliationupstreambillDescCostCny := reconciliationupstreambillFields[14].Descriptor()
+	// reconciliationupstreambill.DefaultCostCny holds the default value on creation for the cost_cny field.
+	reconciliationupstreambill.DefaultCostCny = reconciliationupstreambillDescCostCny.Default.(float64)
+	// reconciliationupstreambillDescSource is the schema descriptor for source field.
+	reconciliationupstreambillDescSource := reconciliationupstreambillFields[15].Descriptor()
+	// reconciliationupstreambill.DefaultSource holds the default value on creation for the source field.
+	reconciliationupstreambill.DefaultSource = reconciliationupstreambillDescSource.Default.(string)
+	// reconciliationupstreambill.SourceValidator is a validator for the "source" field. It is called by the builders before save.
+	reconciliationupstreambill.SourceValidator = reconciliationupstreambillDescSource.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescMatchState is the schema descriptor for match_state field.
+	reconciliationupstreambillDescMatchState := reconciliationupstreambillFields[16].Descriptor()
+	// reconciliationupstreambill.DefaultMatchState holds the default value on creation for the match_state field.
+	reconciliationupstreambill.DefaultMatchState = reconciliationupstreambillDescMatchState.Default.(string)
+	// reconciliationupstreambill.MatchStateValidator is a validator for the "match_state" field. It is called by the builders before save.
+	reconciliationupstreambill.MatchStateValidator = reconciliationupstreambillDescMatchState.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescMatchMethod is the schema descriptor for match_method field.
+	reconciliationupstreambillDescMatchMethod := reconciliationupstreambillFields[17].Descriptor()
+	// reconciliationupstreambill.DefaultMatchMethod holds the default value on creation for the match_method field.
+	reconciliationupstreambill.DefaultMatchMethod = reconciliationupstreambillDescMatchMethod.Default.(string)
+	// reconciliationupstreambill.MatchMethodValidator is a validator for the "match_method" field. It is called by the builders before save.
+	reconciliationupstreambill.MatchMethodValidator = reconciliationupstreambillDescMatchMethod.Validators[0].(func(string) error)
+	// reconciliationupstreambillDescImportedAt is the schema descriptor for imported_at field.
+	reconciliationupstreambillDescImportedAt := reconciliationupstreambillFields[21].Descriptor()
+	// reconciliationupstreambill.DefaultImportedAt holds the default value on creation for the imported_at field.
+	reconciliationupstreambill.DefaultImportedAt = reconciliationupstreambillDescImportedAt.Default.(func() time.Time)
+	reconciliationusageextraMixin := schema.ReconciliationUsageExtra{}.Mixin()
+	reconciliationusageextraMixinFields0 := reconciliationusageextraMixin[0].Fields()
+	_ = reconciliationusageextraMixinFields0
+	reconciliationusageextraFields := schema.ReconciliationUsageExtra{}.Fields()
+	_ = reconciliationusageextraFields
+	// reconciliationusageextraDescCreatedAt is the schema descriptor for created_at field.
+	reconciliationusageextraDescCreatedAt := reconciliationusageextraMixinFields0[0].Descriptor()
+	// reconciliationusageextra.DefaultCreatedAt holds the default value on creation for the created_at field.
+	reconciliationusageextra.DefaultCreatedAt = reconciliationusageextraDescCreatedAt.Default.(func() time.Time)
+	// reconciliationusageextraDescUpdatedAt is the schema descriptor for updated_at field.
+	reconciliationusageextraDescUpdatedAt := reconciliationusageextraMixinFields0[1].Descriptor()
+	// reconciliationusageextra.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	reconciliationusageextra.DefaultUpdatedAt = reconciliationusageextraDescUpdatedAt.Default.(func() time.Time)
+	// reconciliationusageextra.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	reconciliationusageextra.UpdateDefaultUpdatedAt = reconciliationusageextraDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// reconciliationusageextraDescRuleProvider is the schema descriptor for rule_provider field.
+	reconciliationusageextraDescRuleProvider := reconciliationusageextraFields[2].Descriptor()
+	// reconciliationusageextra.DefaultRuleProvider holds the default value on creation for the rule_provider field.
+	reconciliationusageextra.DefaultRuleProvider = reconciliationusageextraDescRuleProvider.Default.(string)
+	// reconciliationusageextra.RuleProviderValidator is a validator for the "rule_provider" field. It is called by the builders before save.
+	reconciliationusageextra.RuleProviderValidator = reconciliationusageextraDescRuleProvider.Validators[0].(func(string) error)
+	// reconciliationusageextraDescRuleExternalKey is the schema descriptor for rule_external_key field.
+	reconciliationusageextraDescRuleExternalKey := reconciliationusageextraFields[3].Descriptor()
+	// reconciliationusageextra.DefaultRuleExternalKey holds the default value on creation for the rule_external_key field.
+	reconciliationusageextra.DefaultRuleExternalKey = reconciliationusageextraDescRuleExternalKey.Default.(string)
+	// reconciliationusageextra.RuleExternalKeyValidator is a validator for the "rule_external_key" field. It is called by the builders before save.
+	reconciliationusageextra.RuleExternalKeyValidator = reconciliationusageextraDescRuleExternalKey.Validators[0].(func(string) error)
+	// reconciliationusageextraDescRuleVersion is the schema descriptor for rule_version field.
+	reconciliationusageextraDescRuleVersion := reconciliationusageextraFields[4].Descriptor()
+	// reconciliationusageextra.DefaultRuleVersion holds the default value on creation for the rule_version field.
+	reconciliationusageextra.DefaultRuleVersion = reconciliationusageextraDescRuleVersion.Default.(int64)
+	// reconciliationusageextraDescRevenueOriginal is the schema descriptor for revenue_original field.
+	reconciliationusageextraDescRevenueOriginal := reconciliationusageextraFields[5].Descriptor()
+	// reconciliationusageextra.DefaultRevenueOriginal holds the default value on creation for the revenue_original field.
+	reconciliationusageextra.DefaultRevenueOriginal = reconciliationusageextraDescRevenueOriginal.Default.(float64)
+	// reconciliationusageextraDescFxRateToCny is the schema descriptor for fx_rate_to_cny field.
+	reconciliationusageextraDescFxRateToCny := reconciliationusageextraFields[6].Descriptor()
+	// reconciliationusageextra.DefaultFxRateToCny holds the default value on creation for the fx_rate_to_cny field.
+	reconciliationusageextra.DefaultFxRateToCny = reconciliationusageextraDescFxRateToCny.Default.(float64)
+	// reconciliationusageextraDescRevenueCny is the schema descriptor for revenue_cny field.
+	reconciliationusageextraDescRevenueCny := reconciliationusageextraFields[7].Descriptor()
+	// reconciliationusageextra.DefaultRevenueCny holds the default value on creation for the revenue_cny field.
+	reconciliationusageextra.DefaultRevenueCny = reconciliationusageextraDescRevenueCny.Default.(float64)
+	// reconciliationusageextraDescCollectedAt is the schema descriptor for collected_at field.
+	reconciliationusageextraDescCollectedAt := reconciliationusageextraFields[8].Descriptor()
+	// reconciliationusageextra.DefaultCollectedAt holds the default value on creation for the collected_at field.
+	reconciliationusageextra.DefaultCollectedAt = reconciliationusageextraDescCollectedAt.Default.(func() time.Time)
 	redeemcodeFields := schema.RedeemCode{}.Fields()
 	_ = redeemcodeFields
 	// redeemcodeDescCode is the schema descriptor for code field.

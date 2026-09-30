@@ -321,6 +321,54 @@ func (f ProxyFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProxyMutation", m)
 }
 
+// The ReconciliationAccountRuleFunc type is an adapter to allow the use of ordinary
+// function as ReconciliationAccountRule mutator.
+type ReconciliationAccountRuleFunc func(context.Context, *ent.ReconciliationAccountRuleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ReconciliationAccountRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ReconciliationAccountRuleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReconciliationAccountRuleMutation", m)
+}
+
+// The ReconciliationSyncStateFunc type is an adapter to allow the use of ordinary
+// function as ReconciliationSyncState mutator.
+type ReconciliationSyncStateFunc func(context.Context, *ent.ReconciliationSyncStateMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ReconciliationSyncStateFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ReconciliationSyncStateMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReconciliationSyncStateMutation", m)
+}
+
+// The ReconciliationUpstreamBillFunc type is an adapter to allow the use of ordinary
+// function as ReconciliationUpstreamBill mutator.
+type ReconciliationUpstreamBillFunc func(context.Context, *ent.ReconciliationUpstreamBillMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ReconciliationUpstreamBillFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ReconciliationUpstreamBillMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReconciliationUpstreamBillMutation", m)
+}
+
+// The ReconciliationUsageExtraFunc type is an adapter to allow the use of ordinary
+// function as ReconciliationUsageExtra mutator.
+type ReconciliationUsageExtraFunc func(context.Context, *ent.ReconciliationUsageExtraMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ReconciliationUsageExtraFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ReconciliationUsageExtraMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReconciliationUsageExtraMutation", m)
+}
+
 // The RedeemCodeFunc type is an adapter to allow the use of ordinary
 // function as RedeemCode mutator.
 type RedeemCodeFunc func(context.Context, *ent.RedeemCodeMutation) (ent.Value, error)

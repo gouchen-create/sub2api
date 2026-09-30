@@ -35,6 +35,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationaccountrule"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationsyncstate"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationupstreambill"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationusageextra"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
@@ -808,6 +812,114 @@ func (f TraverseProxy) Traverse(ctx context.Context, q ent.Query) error {
 	return fmt.Errorf("unexpected query type %T. expect *ent.ProxyQuery", q)
 }
 
+// The ReconciliationAccountRuleFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ReconciliationAccountRuleFunc func(context.Context, *ent.ReconciliationAccountRuleQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ReconciliationAccountRuleFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ReconciliationAccountRuleQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationAccountRuleQuery", q)
+}
+
+// The TraverseReconciliationAccountRule type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseReconciliationAccountRule func(context.Context, *ent.ReconciliationAccountRuleQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseReconciliationAccountRule) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseReconciliationAccountRule) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ReconciliationAccountRuleQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationAccountRuleQuery", q)
+}
+
+// The ReconciliationSyncStateFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ReconciliationSyncStateFunc func(context.Context, *ent.ReconciliationSyncStateQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ReconciliationSyncStateFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ReconciliationSyncStateQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationSyncStateQuery", q)
+}
+
+// The TraverseReconciliationSyncState type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseReconciliationSyncState func(context.Context, *ent.ReconciliationSyncStateQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseReconciliationSyncState) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseReconciliationSyncState) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ReconciliationSyncStateQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationSyncStateQuery", q)
+}
+
+// The ReconciliationUpstreamBillFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ReconciliationUpstreamBillFunc func(context.Context, *ent.ReconciliationUpstreamBillQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ReconciliationUpstreamBillFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ReconciliationUpstreamBillQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationUpstreamBillQuery", q)
+}
+
+// The TraverseReconciliationUpstreamBill type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseReconciliationUpstreamBill func(context.Context, *ent.ReconciliationUpstreamBillQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseReconciliationUpstreamBill) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseReconciliationUpstreamBill) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ReconciliationUpstreamBillQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationUpstreamBillQuery", q)
+}
+
+// The ReconciliationUsageExtraFunc type is an adapter to allow the use of ordinary function as a Querier.
+type ReconciliationUsageExtraFunc func(context.Context, *ent.ReconciliationUsageExtraQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f ReconciliationUsageExtraFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.ReconciliationUsageExtraQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationUsageExtraQuery", q)
+}
+
+// The TraverseReconciliationUsageExtra type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseReconciliationUsageExtra func(context.Context, *ent.ReconciliationUsageExtraQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseReconciliationUsageExtra) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseReconciliationUsageExtra) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.ReconciliationUsageExtraQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.ReconciliationUsageExtraQuery", q)
+}
+
 // The RedeemCodeFunc type is an adapter to allow the use of ordinary function as a Querier.
 type RedeemCodeFunc func(context.Context, *ent.RedeemCodeQuery) (ent.Value, error)
 
@@ -1214,6 +1326,14 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.PromoCodeUsageQuery, predicate.PromoCodeUsage, promocodeusage.OrderOption]{typ: ent.TypePromoCodeUsage, tq: q}, nil
 	case *ent.ProxyQuery:
 		return &query[*ent.ProxyQuery, predicate.Proxy, proxy.OrderOption]{typ: ent.TypeProxy, tq: q}, nil
+	case *ent.ReconciliationAccountRuleQuery:
+		return &query[*ent.ReconciliationAccountRuleQuery, predicate.ReconciliationAccountRule, reconciliationaccountrule.OrderOption]{typ: ent.TypeReconciliationAccountRule, tq: q}, nil
+	case *ent.ReconciliationSyncStateQuery:
+		return &query[*ent.ReconciliationSyncStateQuery, predicate.ReconciliationSyncState, reconciliationsyncstate.OrderOption]{typ: ent.TypeReconciliationSyncState, tq: q}, nil
+	case *ent.ReconciliationUpstreamBillQuery:
+		return &query[*ent.ReconciliationUpstreamBillQuery, predicate.ReconciliationUpstreamBill, reconciliationupstreambill.OrderOption]{typ: ent.TypeReconciliationUpstreamBill, tq: q}, nil
+	case *ent.ReconciliationUsageExtraQuery:
+		return &query[*ent.ReconciliationUsageExtraQuery, predicate.ReconciliationUsageExtra, reconciliationusageextra.OrderOption]{typ: ent.TypeReconciliationUsageExtra, tq: q}, nil
 	case *ent.RedeemCodeQuery:
 		return &query[*ent.RedeemCodeQuery, predicate.RedeemCode, redeemcode.OrderOption]{typ: ent.TypeRedeemCode, tq: q}, nil
 	case *ent.SecuritySecretQuery:

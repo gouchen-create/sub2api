@@ -1,9 +1,110 @@
 <template>
   <AppLayout>
     <div class="space-y-6 pb-12">
-      <!-- 未配置上游地址：引导态（不提供任何凭据输入框） -->
+      <!-- 顶部状态条：任何状态下都展示，先看探测结果再去改配置 -->
       <div
-        v-if="notConfigured"
+        class="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-800 dark:ring-dark-700"
+      >
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex min-w-0 items-start gap-3">
+            <span
+              class="mt-1.5 flex h-2.5 w-2.5 shrink-0 rounded-full"
+              data-testid="companion-status-dot"
+              :class="statusDotClass"
+            ></span>
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-bold text-gray-900 dark:text-white">
+                  {{ t('admin.companion.status.title') }}
+                </span>
+                <span
+                  class="rounded-full px-2.5 py-0.5 text-xs font-semibold"
+                  data-testid="companion-status-badge"
+                  :class="statusBadgeClass"
+                >
+                  {{ statusLabel }}
+                </span>
+                <span v-if="lastUpdated" class="text-xs text-gray-400 dark:text-gray-500">
+                  {{ t('admin.companion.updatedAt', { time: lastUpdatedText }) }}
+                </span>
+                <span v-else class="text-xs text-gray-400 dark:text-gray-500">
+                  {{ t('admin.companion.neverUpdated') }}
+                </span>
+              </div>
+              <p v-if="statusDetail" class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.companion.status.detailLabel') }}: {{ statusDetail }}
+              </p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <label class="inline-flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-300" :title="t('admin.companion.actions.autoRefreshHint')">
+              <input
+                v-model="autoRefresh"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600 dark:bg-dark-800"
+              />
+              {{ t('admin.companion.actions.autoRefresh') }}
+            </label>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="collecting || loading"
+              @click="onCollect"
+            >
+              <Icon name="sync" size="sm" class="mr-1.5" :class="collecting ? 'animate-spin' : ''" />
+              {{ collecting ? t('admin.companion.actions.collecting') : t('admin.companion.actions.collect') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 时间范围：未配置上游时看板不可读，这里一并收起 -->
+        <div
+          v-if="!notConfigured"
+          class="mt-5 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-4 dark:border-dark-700"
+        >
+          <button
+            v-for="preset in presets"
+            :key="preset"
+            type="button"
+            class="rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors"
+            :class="
+              range === preset
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-900 dark:text-gray-300 dark:hover:bg-dark-700'
+            "
+            @click="selectRange(preset)"
+          >
+            {{ t(RANGE_LABEL_KEY[preset]) }}
+          </button>
+
+          <div class="ml-auto flex flex-wrap items-center gap-2">
+            <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.companion.range.start') }}
+              <input v-model="customFrom" type="datetime-local" step="1" class="input w-52 py-1.5 text-xs" />
+            </label>
+            <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.companion.range.end') }}
+              <input v-model="customTo" type="datetime-local" step="1" class="input w-52 py-1.5 text-xs" />
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="applyCustomRange">
+              {{ t('admin.companion.range.apply') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refresh">
+              <Icon name="refresh" size="sm" class="mr-1.5" />
+              {{ t('admin.companion.actions.refresh') }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="rangeSummary && !notConfigured" class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          {{ rangeSummary }}
+        </p>
+      </div>
+
+      <!-- 未配置引导：文案指向下方「上游 A6 配置」，凭据只提交给主服务 -->
+      <div
+        v-if="showSetupGuide"
         class="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-800 dark:ring-dark-700 sm:p-8"
       >
         <div class="flex items-start gap-4">
@@ -14,44 +115,12 @@
             <h3 class="text-base font-bold text-gray-900 dark:text-white">
               {{ t('admin.companion.status.setupTitle') }}
             </h3>
+            <p v-if="guideCause" class="mt-2 break-all text-sm text-gray-600 dark:text-gray-400">
+              {{ guideCause }}
+            </p>
             <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
               {{ t('admin.companion.status.setupIntro') }}
             </p>
-
-            <dl class="mt-4 space-y-3">
-              <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
-                <dt class="font-mono text-xs font-bold text-primary-700 dark:text-primary-300">
-                  COMPANION_BASE_URL
-                </dt>
-                <dd class="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                  {{ t('admin.companion.status.envBaseUrl') }}
-                </dd>
-              </div>
-              <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
-                <dt class="font-mono text-xs font-bold text-primary-700 dark:text-primary-300">
-                  COMPANION_ADMIN_USER
-                </dt>
-                <dd class="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                  {{ t('admin.companion.status.envAdminUser') }}
-                </dd>
-              </div>
-              <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
-                <dt class="font-mono text-xs font-bold text-primary-700 dark:text-primary-300">
-                  COMPANION_ADMIN_PASSWORD
-                </dt>
-                <dd class="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                  {{ t('admin.companion.status.envAdminPassword') }}
-                </dd>
-              </div>
-              <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900">
-                <dt class="font-mono text-xs font-bold text-gray-500 dark:text-gray-400">
-                  COMPANION_HTTP_TIMEOUT
-                </dt>
-                <dd class="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                  {{ t('admin.companion.status.envTimeout') }}
-                </dd>
-              </div>
-            </dl>
 
             <p class="mt-4 flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
               <Icon name="lock" size="sm" class="mt-0.5 shrink-0" />
@@ -61,7 +130,7 @@
             <button
               type="button"
               class="btn btn-secondary mt-5"
-              :disabled="statusLoading"
+              :disabled="statusLoading || settingsLoading"
               @click="retryFromScratch"
             >
               <Icon name="refresh" size="sm" class="mr-1.5" />
@@ -71,100 +140,21 @@
         </div>
       </div>
 
-      <template v-else>
-        <!-- 顶部状态条 -->
-        <div
-          class="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-800 dark:ring-dark-700"
-        >
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div class="flex min-w-0 items-start gap-3">
-              <span class="mt-1.5 flex h-2.5 w-2.5 shrink-0 rounded-full" :class="statusDotClass"></span>
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-sm font-bold text-gray-900 dark:text-white">
-                    {{ t('admin.companion.status.title') }}
-                  </span>
-                  <span
-                    class="rounded-full px-2.5 py-0.5 text-xs font-semibold"
-                    :class="statusBadgeClass"
-                  >
-                    {{ statusLabel }}
-                  </span>
-                  <span v-if="lastUpdated" class="text-xs text-gray-400 dark:text-gray-500">
-                    {{ t('admin.companion.updatedAt', { time: lastUpdatedText }) }}
-                  </span>
-                  <span v-else class="text-xs text-gray-400 dark:text-gray-500">
-                    {{ t('admin.companion.neverUpdated') }}
-                  </span>
-                </div>
-                <p v-if="statusDetail" class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.companion.status.detailLabel') }}: {{ statusDetail }}
-                </p>
-              </div>
-            </div>
+      <!-- 上游 A6 配置：看板上方、状态条下方，保存后立即生效 -->
+      <CompanionA6SettingsCard
+        :key="settingsFormKey"
+        :settings="settings"
+        :error="settingsError"
+        :loading="settingsLoading"
+        :saving="settingsSaving"
+        :clearing="tokenClearing"
+        :highlight="a6TokenMissing"
+        @save="onSettingsSave"
+        @clear-token="onClearTokenRequest"
+        @reload="refreshSettings"
+      />
 
-            <div class="flex flex-wrap items-center gap-3">
-              <label class="inline-flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-300" :title="t('admin.companion.actions.autoRefreshHint')">
-                <input
-                  v-model="autoRefresh"
-                  type="checkbox"
-                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600 dark:bg-dark-800"
-                />
-                {{ t('admin.companion.actions.autoRefresh') }}
-              </label>
-              <button
-                type="button"
-                class="btn btn-primary"
-                :disabled="collecting || loading"
-                @click="onCollect"
-              >
-                <Icon name="sync" size="sm" class="mr-1.5" :class="collecting ? 'animate-spin' : ''" />
-                {{ collecting ? t('admin.companion.actions.collecting') : t('admin.companion.actions.collect') }}
-              </button>
-            </div>
-          </div>
-
-          <!-- 时间范围 -->
-          <div class="mt-5 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-4 dark:border-dark-700">
-            <button
-              v-for="preset in presets"
-              :key="preset"
-              type="button"
-              class="rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors"
-              :class="
-                range === preset
-                  ? 'bg-primary-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-900 dark:text-gray-300 dark:hover:bg-dark-700'
-              "
-              @click="selectRange(preset)"
-            >
-              {{ t(RANGE_LABEL_KEY[preset]) }}
-            </button>
-
-            <div class="ml-auto flex flex-wrap items-center gap-2">
-              <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.companion.range.start') }}
-                <input v-model="customFrom" type="datetime-local" step="1" class="input w-52 py-1.5 text-xs" />
-              </label>
-              <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.companion.range.end') }}
-                <input v-model="customTo" type="datetime-local" step="1" class="input w-52 py-1.5 text-xs" />
-              </label>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="applyCustomRange">
-                {{ t('admin.companion.range.apply') }}
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refresh">
-                <Icon name="refresh" size="sm" class="mr-1.5" />
-                {{ t('admin.companion.actions.refresh') }}
-              </button>
-            </div>
-          </div>
-
-          <p v-if="rangeSummary" class="mt-3 text-xs text-gray-400 dark:text-gray-500">
-            {{ rangeSummary }}
-          </p>
-        </div>
-
+      <template v-if="!notConfigured">
         <!-- 错误提示（未配置态已单独处理） -->
         <div
           v-if="errorInfo"
@@ -267,6 +257,18 @@
         @confirm="onRuleRemoveConfirmed"
         @cancel="pendingRemove = null"
       />
+
+      <!-- 清除访问令牌确认（回落环境变量，不可逆） -->
+      <ConfirmDialog
+        :show="pendingClearToken"
+        :title="t('admin.companion.settings.clearConfirmTitle')"
+        :message="t('admin.companion.settings.clearConfirmMessage')"
+        :confirm-text="t('admin.companion.settings.clearConfirm')"
+        :cancel-text="t('common.cancel')"
+        danger
+        @confirm="onClearTokenConfirmed"
+        @cancel="pendingClearToken = false"
+      />
     </div>
   </AppLayout>
 </template>
@@ -281,6 +283,7 @@ import Icon from '@/components/icons/Icon.vue'
 import CompanionTrendChart from './companion/CompanionTrendChart.vue'
 import CompanionRulesTable from './companion/CompanionRulesTable.vue'
 import CompanionRequestsTable from './companion/CompanionRequestsTable.vue'
+import CompanionA6SettingsCard from './companion/CompanionA6SettingsCard.vue'
 import {
   companionAPI,
   classifyCompanionError,
@@ -288,6 +291,8 @@ import {
   type CompanionErrorInfo,
   type CompanionRequestPage,
   type CompanionRequestStatus,
+  type CompanionSettings,
+  type CompanionSettingsInput,
   type CompanionStatus,
   type CompanionSummary,
   type CompanionTimeSeries,
@@ -328,6 +333,16 @@ const statusLoading = ref(false)
 const statusInfo = ref<CompanionStatus | null>(null)
 const statusError = ref<CompanionErrorInfo | null>(null)
 const errorInfo = ref<CompanionErrorInfo | null>(null)
+
+// 上游 A6 配置：卡片自己维护草稿，父组件只持有服务端真相与加载/保存状态
+const settings = ref<CompanionSettings | null>(null)
+const settingsError = ref<CompanionErrorInfo | null>(null)
+const settingsLoading = ref(false)
+const settingsSaving = ref(false)
+const tokenClearing = ref(false)
+const pendingClearToken = ref(false)
+/** 保存成功后自增：重建配置卡片，清掉本地令牌明文草稿 */
+const settingsFormKey = ref(0)
 
 const summary = ref<CompanionSummary | null>(null)
 const timeseries = ref<CompanionTimeSeries | null>(null)
@@ -450,6 +465,86 @@ async function refreshStatus() {
   }
 }
 
+// ==================== 上游 A6 配置 ====================
+
+/** 读取上游 A6 配置；失败只影响配置卡片，页面其余部分照常工作 */
+async function refreshSettings() {
+  settingsLoading.value = true
+  try {
+    settings.value = await companionAPI.getSettings()
+    settingsError.value = null
+  } catch (err) {
+    settingsError.value = classifyCompanionError(err)
+  } finally {
+    settingsLoading.value = false
+  }
+}
+
+/**
+ * 采纳写接口的返回：契约上它与读接口同构；万一后端只回了空 data，
+ * 就退回再读一次，避免卡片停在空状态。
+ */
+async function adoptSettings(result: CompanionSettings | null | undefined): Promise<void> {
+  settings.value =
+    result && typeof result === 'object' ? result : await companionAPI.getSettings()
+}
+
+/**
+ * 配置变化后的收尾：重建卡片、作废旧的「未配置」判定，再按新配置重新探测与加载。
+ * 令牌保密要求：这里只处理服务端返回的脱敏结果，请求体在调用处即用即弃。
+ */
+async function afterSettingsChanged() {
+  settingsFormKey.value += 1
+  errorInfo.value = null
+  await refreshStatus()
+  if (statusInfo.value?.enabled === false) return
+  if (!firstLoadDone.value) {
+    selectRange('24h')
+    return
+  }
+  void load({ silent: true })
+}
+
+async function onSettingsSave(payload: CompanionSettingsInput) {
+  if (settingsSaving.value) return
+  settingsSaving.value = true
+  try {
+    await adoptSettings(await companionAPI.updateSettings(payload))
+    settingsError.value = null
+    appStore.showSuccess(t('admin.companion.settings.saveSuccess'))
+    await afterSettingsChanged()
+  } catch (err) {
+    // 敏感字段绝不进日志与控制台：只展示服务端返回的 message
+    appStore.showError(
+      classifyCompanionError(err).message || t('admin.companion.settings.saveFailed')
+    )
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+function onClearTokenRequest() {
+  pendingClearToken.value = true
+}
+
+async function onClearTokenConfirmed() {
+  pendingClearToken.value = false
+  if (tokenClearing.value) return
+  tokenClearing.value = true
+  try {
+    await adoptSettings(await companionAPI.updateSettings({ clear_a6_access_token: true }))
+    settingsError.value = null
+    appStore.showSuccess(t('admin.companion.settings.clearSuccess'))
+    await afterSettingsChanged()
+  } catch (err) {
+    appStore.showError(
+      classifyCompanionError(err).message || t('admin.companion.settings.clearFailed')
+    )
+  } finally {
+    tokenClearing.value = false
+  }
+}
+
 async function load(options: { silent?: boolean } = {}) {
   if (loading.value) return
   if (statusInfo.value?.enabled === false) return
@@ -501,7 +596,7 @@ function refresh() {
 
 function retryFromScratch() {
   void (async () => {
-    await refreshStatus()
+    await Promise.all([refreshStatus(), refreshSettings()])
     if (statusInfo.value?.enabled === false) return
     selectRange(range.value === 'custom' ? '24h' : range.value)
   })()
@@ -615,26 +710,64 @@ const notConfigured = computed(
   () => statusInfo.value?.enabled === false || errorInfo.value?.kind === 'not_configured'
 )
 
+/** 访问令牌未配置：引导与卡片高亮都据此判断；配置还没读到时不做任何断言 */
+const a6TokenMissing = computed(
+  () => settings.value !== null && settings.value.a6_token_configured === false
+)
+
+/** 引导卡片：上游不可用，或访问令牌缺失（后者看板仍可展示已采集数据） */
+const showSetupGuide = computed(() => notConfigured.value || a6TokenMissing.value)
+
 const statusDetail = computed(() => statusInfo.value?.detail || statusError.value?.message || '')
 
-const statusLabel = computed(() => {
-  if (!statusInfo.value || statusInfo.value.enabled === false) return t('admin.companion.status.disabled')
-  return statusInfo.value.healthy ? t('admin.companion.status.healthy') : t('admin.companion.status.unhealthy')
+/** 引导卡片的原因行：令牌缺失时用固定文案，其余情况直接展示探测详情 */
+const guideCause = computed(() =>
+  a6TokenMissing.value ? t('admin.companion.status.notConfigured') : statusDetail.value
+)
+
+/**
+ * 状态语气，优先级：未配置 > 不可达 > 已连接。
+ *
+ * 访问令牌缺失时后端也会返回 healthy:false，但真实原因只是「还没配凭据」，
+ * 直接渲染成「不可达」会误导人，所以先看页面配置里的令牌状态。
+ */
+const statusTone = computed<'disabled' | 'unhealthy' | 'healthy'>(() => {
+  if (!statusInfo.value || statusInfo.value.enabled === false || a6TokenMissing.value) {
+    return 'disabled'
+  }
+  return statusInfo.value.healthy ? 'healthy' : 'unhealthy'
 })
 
-const statusDotClass = computed(() => {
-  if (!statusInfo.value?.enabled) return 'bg-gray-400'
-  return statusInfo.value.healthy ? 'bg-green-500' : 'bg-amber-500'
+const statusLabel = computed(() => {
+  switch (statusTone.value) {
+    case 'healthy':
+      return t('admin.companion.status.healthy')
+    case 'unhealthy':
+      return t('admin.companion.status.unhealthy')
+    default:
+      return t('admin.companion.status.disabled')
+  }
 })
+
+const statusDotClass = computed(
+  () =>
+    ({
+      disabled: 'bg-gray-400',
+      unhealthy: 'bg-amber-500',
+      healthy: 'bg-green-500'
+    })[statusTone.value]
+)
 
 const statusBadgeClass = computed(() => {
   const base = 'rounded-full px-2.5 py-0.5 text-xs font-semibold '
-  if (!statusInfo.value?.enabled) {
-    return base + 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
-  }
-  return statusInfo.value.healthy
-    ? base + 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-    : base + 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  return (
+    base +
+    {
+      disabled: 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300',
+      unhealthy: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+      healthy: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+    }[statusTone.value]
+  )
 })
 
 const errorTitle = computed(() => {
@@ -768,7 +901,7 @@ const metricCards = computed<MetricCard[]>(() => {
 
 onMounted(async () => {
   startTimer()
-  await refreshStatus()
+  await Promise.all([refreshStatus(), refreshSettings()])
   if (statusInfo.value?.enabled === false) {
     firstLoadDone.value = true
     return

@@ -105,6 +105,7 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
+	Reconciliation          ReconciliationConfig          `mapstructure:"reconciliation"`
 
 	// Enforce only API-key spending windows in simple mode.
 	SimpleModeKeyRateLimitEnabled bool `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
@@ -678,6 +679,10 @@ type PricingConfig struct {
 	FallbackFile string `mapstructure:"fallback_file"`
 	// 覆盖补丁文件路径（可选）：条目按字段浅合并覆盖目录/回退数据，优先级最高
 	OverrideFile string `mapstructure:"override_file"`
+	// 对外公开的模型价格文件路径（公开接口 GET /api/provider/pricing 的可选覆盖数据源），
+	// 相对进程工作目录。留空则只用编译进二进制的内置价格数据；
+	// 配了路径但读不到或格式非法时同样回落到内置数据（只记日志，不对外报错）。
+	ProviderPricingFile string `mapstructure:"provider_pricing_file"`
 	// 更新间隔（小时）
 	UpdateIntervalHours int `mapstructure:"update_interval_hours"`
 	// 哈希校验间隔（分钟）
@@ -1999,10 +2004,49 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 	addConfigPath("/etc/sub2api")
 }
 
+// ReconciliationConfig 是「经营对账」内置能力的配置。
+//
+// 对账能力已内置进本进程，因此不再有 companion 的服务地址与 HTTP Basic 凭据：
+// 那些配置项随独立容器一起退场了。
+type ReconciliationConfig struct {
+	// Enabled 是否启用对账采集与上游账单同步。
+	Enabled bool `mapstructure:"enabled"`
+	// FxUSDCNYRate 美元转人民币的换算数字；填 1 表示不做换算。
+	//
+	// 这是「记账口径」而不是「实时牌价」：每条记录在写入时把它冻结下来，
+	// 之后改动这个数字只影响新记录，历史金额不会被重算。
+	FxUSDCNYRate float64 `mapstructure:"fx_usd_cny_rate"`
+	// A6BaseURL 上游 A6 站点基址。
+	A6BaseURL string `mapstructure:"a6_base_url"`
+	// A6AccessToken 上游 A6 系统访问令牌，只允许通过环境变量注入，不要写进配置文件。
+	A6AccessToken string `mapstructure:"a6_access_token"`
+	// A6UserID 上游 A6 用户标识。
+	A6UserID string `mapstructure:"a6_user_id"`
+	// A6LookbackHours 单轮同步回看的窗口长度。
+	A6LookbackHours int `mapstructure:"a6_lookback_hours"`
+	// TimeoutSeconds 单次访问上游的超时时间。
+	TimeoutSeconds int `mapstructure:"timeout_seconds"`
+	// UsageIntervalSeconds 下游用量采集的间隔。
+	UsageIntervalSeconds int `mapstructure:"usage_interval_seconds"`
+	// A6SyncIntervalSeconds 上游账单同步的间隔。
+	A6SyncIntervalSeconds int `mapstructure:"a6_sync_interval_seconds"`
+}
+
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
 	viper.SetDefault("simple_mode.auto_create_default_groups", true)
 	viper.SetDefault("simple_mode_key_rate_limit_enabled", false)
+
+	// Reconciliation（经营对账，内置在主进程里）
+	viper.SetDefault("reconciliation.enabled", true)
+	viper.SetDefault("reconciliation.fx_usd_cny_rate", 6.71)
+	viper.SetDefault("reconciliation.a6_base_url", "")
+	viper.SetDefault("reconciliation.a6_access_token", "")
+	viper.SetDefault("reconciliation.a6_user_id", "")
+	viper.SetDefault("reconciliation.a6_lookback_hours", 24)
+	viper.SetDefault("reconciliation.timeout_seconds", 90)
+	viper.SetDefault("reconciliation.usage_interval_seconds", 30)
+	viper.SetDefault("reconciliation.a6_sync_interval_seconds", 300)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2307,6 +2351,8 @@ func setDefaults() {
 	viper.SetDefault("pricing.override_file", "")
 	viper.SetDefault("pricing.update_interval_hours", 24)
 	viper.SetDefault("pricing.hash_check_interval_minutes", 10)
+	// 对外公开的模型价格文件（公开接口 GET /api/provider/pricing 的数据源）
+	viper.SetDefault("pricing.provider_pricing_file", "")
 
 	// 本地进程插件。插件必须由管理员手动上传，项目默认不携带任何插件能力。
 	viper.SetDefault("plugins.data_dir", "")

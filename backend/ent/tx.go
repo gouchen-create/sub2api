@@ -66,6 +66,14 @@ type Tx struct {
 	PromoCodeUsage *PromoCodeUsageClient
 	// Proxy is the client for interacting with the Proxy builders.
 	Proxy *ProxyClient
+	// ReconciliationAccountRule is the client for interacting with the ReconciliationAccountRule builders.
+	ReconciliationAccountRule *ReconciliationAccountRuleClient
+	// ReconciliationSyncState is the client for interacting with the ReconciliationSyncState builders.
+	ReconciliationSyncState *ReconciliationSyncStateClient
+	// ReconciliationUpstreamBill is the client for interacting with the ReconciliationUpstreamBill builders.
+	ReconciliationUpstreamBill *ReconciliationUpstreamBillClient
+	// ReconciliationUsageExtra is the client for interacting with the ReconciliationUsageExtra builders.
+	ReconciliationUsageExtra *ReconciliationUsageExtraClient
 	// RedeemCode is the client for interacting with the RedeemCode builders.
 	RedeemCode *RedeemCodeClient
 	// SecuritySecret is the client for interacting with the SecuritySecret builders.
@@ -249,6 +257,10 @@ func (tx *Tx) init() {
 	tx.PromoCode = NewPromoCodeClient(tx.config)
 	tx.PromoCodeUsage = NewPromoCodeUsageClient(tx.config)
 	tx.Proxy = NewProxyClient(tx.config)
+	tx.ReconciliationAccountRule = NewReconciliationAccountRuleClient(tx.config)
+	tx.ReconciliationSyncState = NewReconciliationSyncStateClient(tx.config)
+	tx.ReconciliationUpstreamBill = NewReconciliationUpstreamBillClient(tx.config)
+	tx.ReconciliationUsageExtra = NewReconciliationUsageExtraClient(tx.config)
 	tx.RedeemCode = NewRedeemCodeClient(tx.config)
 	tx.SecuritySecret = NewSecuritySecretClient(tx.config)
 	tx.Setting = NewSettingClient(tx.config)

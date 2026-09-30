@@ -84,6 +84,18 @@ type PromoCodeUsage func(*sql.Selector)
 // Proxy is the predicate function for proxy builders.
 type Proxy func(*sql.Selector)
 
+// ReconciliationAccountRule is the predicate function for reconciliationaccountrule builders.
+type ReconciliationAccountRule func(*sql.Selector)
+
+// ReconciliationSyncState is the predicate function for reconciliationsyncstate builders.
+type ReconciliationSyncState func(*sql.Selector)
+
+// ReconciliationUpstreamBill is the predicate function for reconciliationupstreambill builders.
+type ReconciliationUpstreamBill func(*sql.Selector)
+
+// ReconciliationUsageExtra is the predicate function for reconciliationusageextra builders.
+type ReconciliationUsageExtra func(*sql.Selector)
+
 // RedeemCode is the predicate function for redeemcode builders.
 type RedeemCode func(*sql.Selector)
 

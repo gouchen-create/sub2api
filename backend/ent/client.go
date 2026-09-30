@@ -41,6 +41,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationaccountrule"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationsyncstate"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationupstreambill"
+	"github.com/Wei-Shaw/sub2api/ent/reconciliationusageextra"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/securitysecret"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
@@ -115,6 +119,14 @@ type Client struct {
 	PromoCodeUsage *PromoCodeUsageClient
 	// Proxy is the client for interacting with the Proxy builders.
 	Proxy *ProxyClient
+	// ReconciliationAccountRule is the client for interacting with the ReconciliationAccountRule builders.
+	ReconciliationAccountRule *ReconciliationAccountRuleClient
+	// ReconciliationSyncState is the client for interacting with the ReconciliationSyncState builders.
+	ReconciliationSyncState *ReconciliationSyncStateClient
+	// ReconciliationUpstreamBill is the client for interacting with the ReconciliationUpstreamBill builders.
+	ReconciliationUpstreamBill *ReconciliationUpstreamBillClient
+	// ReconciliationUsageExtra is the client for interacting with the ReconciliationUsageExtra builders.
+	ReconciliationUsageExtra *ReconciliationUsageExtraClient
 	// RedeemCode is the client for interacting with the RedeemCode builders.
 	RedeemCode *RedeemCodeClient
 	// SecuritySecret is the client for interacting with the SecuritySecret builders.
@@ -178,6 +190,10 @@ func (c *Client) init() {
 	c.PromoCode = NewPromoCodeClient(c.config)
 	c.PromoCodeUsage = NewPromoCodeUsageClient(c.config)
 	c.Proxy = NewProxyClient(c.config)
+	c.ReconciliationAccountRule = NewReconciliationAccountRuleClient(c.config)
+	c.ReconciliationSyncState = NewReconciliationSyncStateClient(c.config)
+	c.ReconciliationUpstreamBill = NewReconciliationUpstreamBillClient(c.config)
+	c.ReconciliationUsageExtra = NewReconciliationUsageExtraClient(c.config)
 	c.RedeemCode = NewRedeemCodeClient(c.config)
 	c.SecuritySecret = NewSecuritySecretClient(c.config)
 	c.Setting = NewSettingClient(c.config)
@@ -309,6 +325,10 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		PromoCode:                     NewPromoCodeClient(cfg),
 		PromoCodeUsage:                NewPromoCodeUsageClient(cfg),
 		Proxy:                         NewProxyClient(cfg),
+		ReconciliationAccountRule:     NewReconciliationAccountRuleClient(cfg),
+		ReconciliationSyncState:       NewReconciliationSyncStateClient(cfg),
+		ReconciliationUpstreamBill:    NewReconciliationUpstreamBillClient(cfg),
+		ReconciliationUsageExtra:      NewReconciliationUsageExtraClient(cfg),
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
@@ -367,6 +387,10 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		PromoCode:                     NewPromoCodeClient(cfg),
 		PromoCodeUsage:                NewPromoCodeUsageClient(cfg),
 		Proxy:                         NewProxyClient(cfg),
+		ReconciliationAccountRule:     NewReconciliationAccountRuleClient(cfg),
+		ReconciliationSyncState:       NewReconciliationSyncStateClient(cfg),
+		ReconciliationUpstreamBill:    NewReconciliationUpstreamBillClient(cfg),
+		ReconciliationUsageExtra:      NewReconciliationUsageExtraClient(cfg),
 		RedeemCode:                    NewRedeemCodeClient(cfg),
 		SecuritySecret:                NewSecuritySecretClient(cfg),
 		Setting:                       NewSettingClient(cfg),
@@ -416,10 +440,12 @@ func (c *Client) Use(hooks ...Hook) {
 		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
 		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.Proxy, c.ReconciliationAccountRule, c.ReconciliationSyncState,
+		c.ReconciliationUpstreamBill, c.ReconciliationUsageExtra, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -436,10 +462,12 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
 		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
 		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.Proxy, c.ReconciliationAccountRule, c.ReconciliationSyncState,
+		c.ReconciliationUpstreamBill, c.ReconciliationUsageExtra, c.RedeemCode,
+		c.SecuritySecret, c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -500,6 +528,14 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.PromoCodeUsage.mutate(ctx, m)
 	case *ProxyMutation:
 		return c.Proxy.mutate(ctx, m)
+	case *ReconciliationAccountRuleMutation:
+		return c.ReconciliationAccountRule.mutate(ctx, m)
+	case *ReconciliationSyncStateMutation:
+		return c.ReconciliationSyncState.mutate(ctx, m)
+	case *ReconciliationUpstreamBillMutation:
+		return c.ReconciliationUpstreamBill.mutate(ctx, m)
+	case *ReconciliationUsageExtraMutation:
+		return c.ReconciliationUsageExtra.mutate(ctx, m)
 	case *RedeemCodeMutation:
 		return c.RedeemCode.mutate(ctx, m)
 	case *SecuritySecretMutation:
@@ -4654,6 +4690,538 @@ func (c *ProxyClient) mutate(ctx context.Context, m *ProxyMutation) (Value, erro
 	}
 }
 
+// ReconciliationAccountRuleClient is a client for the ReconciliationAccountRule schema.
+type ReconciliationAccountRuleClient struct {
+	config
+}
+
+// NewReconciliationAccountRuleClient returns a client for the ReconciliationAccountRule from the given config.
+func NewReconciliationAccountRuleClient(c config) *ReconciliationAccountRuleClient {
+	return &ReconciliationAccountRuleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `reconciliationaccountrule.Hooks(f(g(h())))`.
+func (c *ReconciliationAccountRuleClient) Use(hooks ...Hook) {
+	c.hooks.ReconciliationAccountRule = append(c.hooks.ReconciliationAccountRule, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `reconciliationaccountrule.Intercept(f(g(h())))`.
+func (c *ReconciliationAccountRuleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ReconciliationAccountRule = append(c.inters.ReconciliationAccountRule, interceptors...)
+}
+
+// Create returns a builder for creating a ReconciliationAccountRule entity.
+func (c *ReconciliationAccountRuleClient) Create() *ReconciliationAccountRuleCreate {
+	mutation := newReconciliationAccountRuleMutation(c.config, OpCreate)
+	return &ReconciliationAccountRuleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ReconciliationAccountRule entities.
+func (c *ReconciliationAccountRuleClient) CreateBulk(builders ...*ReconciliationAccountRuleCreate) *ReconciliationAccountRuleCreateBulk {
+	return &ReconciliationAccountRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ReconciliationAccountRuleClient) MapCreateBulk(slice any, setFunc func(*ReconciliationAccountRuleCreate, int)) *ReconciliationAccountRuleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ReconciliationAccountRuleCreateBulk{err: fmt.Errorf("calling to ReconciliationAccountRuleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ReconciliationAccountRuleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ReconciliationAccountRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ReconciliationAccountRule.
+func (c *ReconciliationAccountRuleClient) Update() *ReconciliationAccountRuleUpdate {
+	mutation := newReconciliationAccountRuleMutation(c.config, OpUpdate)
+	return &ReconciliationAccountRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ReconciliationAccountRuleClient) UpdateOne(_m *ReconciliationAccountRule) *ReconciliationAccountRuleUpdateOne {
+	mutation := newReconciliationAccountRuleMutation(c.config, OpUpdateOne, withReconciliationAccountRule(_m))
+	return &ReconciliationAccountRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ReconciliationAccountRuleClient) UpdateOneID(id int64) *ReconciliationAccountRuleUpdateOne {
+	mutation := newReconciliationAccountRuleMutation(c.config, OpUpdateOne, withReconciliationAccountRuleID(id))
+	return &ReconciliationAccountRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ReconciliationAccountRule.
+func (c *ReconciliationAccountRuleClient) Delete() *ReconciliationAccountRuleDelete {
+	mutation := newReconciliationAccountRuleMutation(c.config, OpDelete)
+	return &ReconciliationAccountRuleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ReconciliationAccountRuleClient) DeleteOne(_m *ReconciliationAccountRule) *ReconciliationAccountRuleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ReconciliationAccountRuleClient) DeleteOneID(id int64) *ReconciliationAccountRuleDeleteOne {
+	builder := c.Delete().Where(reconciliationaccountrule.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ReconciliationAccountRuleDeleteOne{builder}
+}
+
+// Query returns a query builder for ReconciliationAccountRule.
+func (c *ReconciliationAccountRuleClient) Query() *ReconciliationAccountRuleQuery {
+	return &ReconciliationAccountRuleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeReconciliationAccountRule},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ReconciliationAccountRule entity by its id.
+func (c *ReconciliationAccountRuleClient) Get(ctx context.Context, id int64) (*ReconciliationAccountRule, error) {
+	return c.Query().Where(reconciliationaccountrule.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ReconciliationAccountRuleClient) GetX(ctx context.Context, id int64) *ReconciliationAccountRule {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ReconciliationAccountRuleClient) Hooks() []Hook {
+	return c.hooks.ReconciliationAccountRule
+}
+
+// Interceptors returns the client interceptors.
+func (c *ReconciliationAccountRuleClient) Interceptors() []Interceptor {
+	return c.inters.ReconciliationAccountRule
+}
+
+func (c *ReconciliationAccountRuleClient) mutate(ctx context.Context, m *ReconciliationAccountRuleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ReconciliationAccountRuleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ReconciliationAccountRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ReconciliationAccountRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ReconciliationAccountRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ReconciliationAccountRule mutation op: %q", m.Op())
+	}
+}
+
+// ReconciliationSyncStateClient is a client for the ReconciliationSyncState schema.
+type ReconciliationSyncStateClient struct {
+	config
+}
+
+// NewReconciliationSyncStateClient returns a client for the ReconciliationSyncState from the given config.
+func NewReconciliationSyncStateClient(c config) *ReconciliationSyncStateClient {
+	return &ReconciliationSyncStateClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `reconciliationsyncstate.Hooks(f(g(h())))`.
+func (c *ReconciliationSyncStateClient) Use(hooks ...Hook) {
+	c.hooks.ReconciliationSyncState = append(c.hooks.ReconciliationSyncState, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `reconciliationsyncstate.Intercept(f(g(h())))`.
+func (c *ReconciliationSyncStateClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ReconciliationSyncState = append(c.inters.ReconciliationSyncState, interceptors...)
+}
+
+// Create returns a builder for creating a ReconciliationSyncState entity.
+func (c *ReconciliationSyncStateClient) Create() *ReconciliationSyncStateCreate {
+	mutation := newReconciliationSyncStateMutation(c.config, OpCreate)
+	return &ReconciliationSyncStateCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ReconciliationSyncState entities.
+func (c *ReconciliationSyncStateClient) CreateBulk(builders ...*ReconciliationSyncStateCreate) *ReconciliationSyncStateCreateBulk {
+	return &ReconciliationSyncStateCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ReconciliationSyncStateClient) MapCreateBulk(slice any, setFunc func(*ReconciliationSyncStateCreate, int)) *ReconciliationSyncStateCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ReconciliationSyncStateCreateBulk{err: fmt.Errorf("calling to ReconciliationSyncStateClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ReconciliationSyncStateCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ReconciliationSyncStateCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ReconciliationSyncState.
+func (c *ReconciliationSyncStateClient) Update() *ReconciliationSyncStateUpdate {
+	mutation := newReconciliationSyncStateMutation(c.config, OpUpdate)
+	return &ReconciliationSyncStateUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ReconciliationSyncStateClient) UpdateOne(_m *ReconciliationSyncState) *ReconciliationSyncStateUpdateOne {
+	mutation := newReconciliationSyncStateMutation(c.config, OpUpdateOne, withReconciliationSyncState(_m))
+	return &ReconciliationSyncStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ReconciliationSyncStateClient) UpdateOneID(id int64) *ReconciliationSyncStateUpdateOne {
+	mutation := newReconciliationSyncStateMutation(c.config, OpUpdateOne, withReconciliationSyncStateID(id))
+	return &ReconciliationSyncStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ReconciliationSyncState.
+func (c *ReconciliationSyncStateClient) Delete() *ReconciliationSyncStateDelete {
+	mutation := newReconciliationSyncStateMutation(c.config, OpDelete)
+	return &ReconciliationSyncStateDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ReconciliationSyncStateClient) DeleteOne(_m *ReconciliationSyncState) *ReconciliationSyncStateDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ReconciliationSyncStateClient) DeleteOneID(id int64) *ReconciliationSyncStateDeleteOne {
+	builder := c.Delete().Where(reconciliationsyncstate.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ReconciliationSyncStateDeleteOne{builder}
+}
+
+// Query returns a query builder for ReconciliationSyncState.
+func (c *ReconciliationSyncStateClient) Query() *ReconciliationSyncStateQuery {
+	return &ReconciliationSyncStateQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeReconciliationSyncState},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ReconciliationSyncState entity by its id.
+func (c *ReconciliationSyncStateClient) Get(ctx context.Context, id int64) (*ReconciliationSyncState, error) {
+	return c.Query().Where(reconciliationsyncstate.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ReconciliationSyncStateClient) GetX(ctx context.Context, id int64) *ReconciliationSyncState {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ReconciliationSyncStateClient) Hooks() []Hook {
+	return c.hooks.ReconciliationSyncState
+}
+
+// Interceptors returns the client interceptors.
+func (c *ReconciliationSyncStateClient) Interceptors() []Interceptor {
+	return c.inters.ReconciliationSyncState
+}
+
+func (c *ReconciliationSyncStateClient) mutate(ctx context.Context, m *ReconciliationSyncStateMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ReconciliationSyncStateCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ReconciliationSyncStateUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ReconciliationSyncStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ReconciliationSyncStateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ReconciliationSyncState mutation op: %q", m.Op())
+	}
+}
+
+// ReconciliationUpstreamBillClient is a client for the ReconciliationUpstreamBill schema.
+type ReconciliationUpstreamBillClient struct {
+	config
+}
+
+// NewReconciliationUpstreamBillClient returns a client for the ReconciliationUpstreamBill from the given config.
+func NewReconciliationUpstreamBillClient(c config) *ReconciliationUpstreamBillClient {
+	return &ReconciliationUpstreamBillClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `reconciliationupstreambill.Hooks(f(g(h())))`.
+func (c *ReconciliationUpstreamBillClient) Use(hooks ...Hook) {
+	c.hooks.ReconciliationUpstreamBill = append(c.hooks.ReconciliationUpstreamBill, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `reconciliationupstreambill.Intercept(f(g(h())))`.
+func (c *ReconciliationUpstreamBillClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ReconciliationUpstreamBill = append(c.inters.ReconciliationUpstreamBill, interceptors...)
+}
+
+// Create returns a builder for creating a ReconciliationUpstreamBill entity.
+func (c *ReconciliationUpstreamBillClient) Create() *ReconciliationUpstreamBillCreate {
+	mutation := newReconciliationUpstreamBillMutation(c.config, OpCreate)
+	return &ReconciliationUpstreamBillCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ReconciliationUpstreamBill entities.
+func (c *ReconciliationUpstreamBillClient) CreateBulk(builders ...*ReconciliationUpstreamBillCreate) *ReconciliationUpstreamBillCreateBulk {
+	return &ReconciliationUpstreamBillCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ReconciliationUpstreamBillClient) MapCreateBulk(slice any, setFunc func(*ReconciliationUpstreamBillCreate, int)) *ReconciliationUpstreamBillCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ReconciliationUpstreamBillCreateBulk{err: fmt.Errorf("calling to ReconciliationUpstreamBillClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ReconciliationUpstreamBillCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ReconciliationUpstreamBillCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ReconciliationUpstreamBill.
+func (c *ReconciliationUpstreamBillClient) Update() *ReconciliationUpstreamBillUpdate {
+	mutation := newReconciliationUpstreamBillMutation(c.config, OpUpdate)
+	return &ReconciliationUpstreamBillUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ReconciliationUpstreamBillClient) UpdateOne(_m *ReconciliationUpstreamBill) *ReconciliationUpstreamBillUpdateOne {
+	mutation := newReconciliationUpstreamBillMutation(c.config, OpUpdateOne, withReconciliationUpstreamBill(_m))
+	return &ReconciliationUpstreamBillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ReconciliationUpstreamBillClient) UpdateOneID(id int64) *ReconciliationUpstreamBillUpdateOne {
+	mutation := newReconciliationUpstreamBillMutation(c.config, OpUpdateOne, withReconciliationUpstreamBillID(id))
+	return &ReconciliationUpstreamBillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ReconciliationUpstreamBill.
+func (c *ReconciliationUpstreamBillClient) Delete() *ReconciliationUpstreamBillDelete {
+	mutation := newReconciliationUpstreamBillMutation(c.config, OpDelete)
+	return &ReconciliationUpstreamBillDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ReconciliationUpstreamBillClient) DeleteOne(_m *ReconciliationUpstreamBill) *ReconciliationUpstreamBillDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ReconciliationUpstreamBillClient) DeleteOneID(id int64) *ReconciliationUpstreamBillDeleteOne {
+	builder := c.Delete().Where(reconciliationupstreambill.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ReconciliationUpstreamBillDeleteOne{builder}
+}
+
+// Query returns a query builder for ReconciliationUpstreamBill.
+func (c *ReconciliationUpstreamBillClient) Query() *ReconciliationUpstreamBillQuery {
+	return &ReconciliationUpstreamBillQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeReconciliationUpstreamBill},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ReconciliationUpstreamBill entity by its id.
+func (c *ReconciliationUpstreamBillClient) Get(ctx context.Context, id int64) (*ReconciliationUpstreamBill, error) {
+	return c.Query().Where(reconciliationupstreambill.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ReconciliationUpstreamBillClient) GetX(ctx context.Context, id int64) *ReconciliationUpstreamBill {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ReconciliationUpstreamBillClient) Hooks() []Hook {
+	return c.hooks.ReconciliationUpstreamBill
+}
+
+// Interceptors returns the client interceptors.
+func (c *ReconciliationUpstreamBillClient) Interceptors() []Interceptor {
+	return c.inters.ReconciliationUpstreamBill
+}
+
+func (c *ReconciliationUpstreamBillClient) mutate(ctx context.Context, m *ReconciliationUpstreamBillMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ReconciliationUpstreamBillCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ReconciliationUpstreamBillUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ReconciliationUpstreamBillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ReconciliationUpstreamBillDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ReconciliationUpstreamBill mutation op: %q", m.Op())
+	}
+}
+
+// ReconciliationUsageExtraClient is a client for the ReconciliationUsageExtra schema.
+type ReconciliationUsageExtraClient struct {
+	config
+}
+
+// NewReconciliationUsageExtraClient returns a client for the ReconciliationUsageExtra from the given config.
+func NewReconciliationUsageExtraClient(c config) *ReconciliationUsageExtraClient {
+	return &ReconciliationUsageExtraClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `reconciliationusageextra.Hooks(f(g(h())))`.
+func (c *ReconciliationUsageExtraClient) Use(hooks ...Hook) {
+	c.hooks.ReconciliationUsageExtra = append(c.hooks.ReconciliationUsageExtra, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `reconciliationusageextra.Intercept(f(g(h())))`.
+func (c *ReconciliationUsageExtraClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ReconciliationUsageExtra = append(c.inters.ReconciliationUsageExtra, interceptors...)
+}
+
+// Create returns a builder for creating a ReconciliationUsageExtra entity.
+func (c *ReconciliationUsageExtraClient) Create() *ReconciliationUsageExtraCreate {
+	mutation := newReconciliationUsageExtraMutation(c.config, OpCreate)
+	return &ReconciliationUsageExtraCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ReconciliationUsageExtra entities.
+func (c *ReconciliationUsageExtraClient) CreateBulk(builders ...*ReconciliationUsageExtraCreate) *ReconciliationUsageExtraCreateBulk {
+	return &ReconciliationUsageExtraCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ReconciliationUsageExtraClient) MapCreateBulk(slice any, setFunc func(*ReconciliationUsageExtraCreate, int)) *ReconciliationUsageExtraCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ReconciliationUsageExtraCreateBulk{err: fmt.Errorf("calling to ReconciliationUsageExtraClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ReconciliationUsageExtraCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ReconciliationUsageExtraCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ReconciliationUsageExtra.
+func (c *ReconciliationUsageExtraClient) Update() *ReconciliationUsageExtraUpdate {
+	mutation := newReconciliationUsageExtraMutation(c.config, OpUpdate)
+	return &ReconciliationUsageExtraUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ReconciliationUsageExtraClient) UpdateOne(_m *ReconciliationUsageExtra) *ReconciliationUsageExtraUpdateOne {
+	mutation := newReconciliationUsageExtraMutation(c.config, OpUpdateOne, withReconciliationUsageExtra(_m))
+	return &ReconciliationUsageExtraUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ReconciliationUsageExtraClient) UpdateOneID(id int64) *ReconciliationUsageExtraUpdateOne {
+	mutation := newReconciliationUsageExtraMutation(c.config, OpUpdateOne, withReconciliationUsageExtraID(id))
+	return &ReconciliationUsageExtraUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ReconciliationUsageExtra.
+func (c *ReconciliationUsageExtraClient) Delete() *ReconciliationUsageExtraDelete {
+	mutation := newReconciliationUsageExtraMutation(c.config, OpDelete)
+	return &ReconciliationUsageExtraDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ReconciliationUsageExtraClient) DeleteOne(_m *ReconciliationUsageExtra) *ReconciliationUsageExtraDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ReconciliationUsageExtraClient) DeleteOneID(id int64) *ReconciliationUsageExtraDeleteOne {
+	builder := c.Delete().Where(reconciliationusageextra.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ReconciliationUsageExtraDeleteOne{builder}
+}
+
+// Query returns a query builder for ReconciliationUsageExtra.
+func (c *ReconciliationUsageExtraClient) Query() *ReconciliationUsageExtraQuery {
+	return &ReconciliationUsageExtraQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeReconciliationUsageExtra},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ReconciliationUsageExtra entity by its id.
+func (c *ReconciliationUsageExtraClient) Get(ctx context.Context, id int64) (*ReconciliationUsageExtra, error) {
+	return c.Query().Where(reconciliationusageextra.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ReconciliationUsageExtraClient) GetX(ctx context.Context, id int64) *ReconciliationUsageExtra {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ReconciliationUsageExtraClient) Hooks() []Hook {
+	return c.hooks.ReconciliationUsageExtra
+}
+
+// Interceptors returns the client interceptors.
+func (c *ReconciliationUsageExtraClient) Interceptors() []Interceptor {
+	return c.inters.ReconciliationUsageExtra
+}
+
+func (c *ReconciliationUsageExtraClient) mutate(ctx context.Context, m *ReconciliationUsageExtraMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ReconciliationUsageExtraCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ReconciliationUsageExtraUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ReconciliationUsageExtraUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ReconciliationUsageExtraDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ReconciliationUsageExtra mutation op: %q", m.Op())
+	}
+}
+
 // RedeemCodeClient is a client for the RedeemCode schema.
 type RedeemCodeClient struct {
 	config
@@ -6847,10 +7415,11 @@ type (
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		PromoCodeUsage, Proxy, ReconciliationAccountRule, ReconciliationSyncState,
+		ReconciliationUpstreamBill, ReconciliationUsageExtra, RedeemCode,
+		SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
@@ -6859,10 +7428,11 @@ type (
 		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		PromoCodeUsage, Proxy, ReconciliationAccountRule, ReconciliationSyncState,
+		ReconciliationUpstreamBill, ReconciliationUsageExtra, RedeemCode,
+		SecuritySecret, Setting, SubscriptionPlan, TLSFingerprintProfile,
+		UsageCleanupTask, UsageLog, User, UserAllowedGroup, UserAttributeDefinition,
+		UserAttributeValue, UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

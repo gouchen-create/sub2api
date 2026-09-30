@@ -1,304 +1,990 @@
 package admin
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Companion 旁路服务的代理配置。凭据只从服务端环境变量读取，绝不下发到浏览器。
-const (
-	envCompanionBaseURL   = "COMPANION_BASE_URL"
-	envCompanionAdminUser = "COMPANION_ADMIN_USER"
-	envCompanionAdminPass = "COMPANION_ADMIN_PASSWORD"
-	envCompanionTimeout   = "COMPANION_HTTP_TIMEOUT"
+// 请求体大小上限，防止异常大的导入请求打爆面板内存。
+const companionMaxRequestBytes = 8 << 20
 
-	companionDefaultTimeout = 20 * time.Second
-	// companionMaxResponseBytes 限制上游响应体，避免异常大响应打爆面板内存。
-	companionMaxResponseBytes = 8 << 20
-	// companionMaxRequestBytes 限制透传的请求体大小。
-	companionMaxRequestBytes = 1 << 20
-)
-
-// companionAccountIDPattern 限制账号规则路径参数，既贴合 Sub2API 的数字账号 ID，
-// 也避免把前端输入拼进上游 URL 造成路径穿越。
-var companionAccountIDPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
-
-// CompanionHandler 把 Companion 旁路服务（经营对账 / 上游账单归集）的 /ops/api/* 接口
-// 经管理员鉴权后代理给管理后台页面。
+// CompanionHandler 提供经营对账（Companion）的管理端接口。
 //
-// 安全设计：
-//   - 浏览器侧鉴权完全复用管理后台的 admin 中间件链（在路由注册处绑定）；
-//   - Companion 自身的 HTTP Basic 凭据只存在于服务端进程；
-//   - 上游路径走硬编码白名单，绝不接受前端传入任意路径，避免退化成开放代理（SSRF）。
+// 这些接口原先是反向代理到独立的 companion 旁路服务，服务端持有该服务的 HTTP Basic
+// 凭据。对账能力内置进本进程后改为直接调用服务层，因此不再需要任何上游地址与凭据，
+// 也不存在凭据泄露到浏览器的可能。
+//
+// 路径、方法与响应结构与代理版本逐字保持一致，管理后台前端无需任何改动。
 type CompanionHandler struct {
-	baseURL string
-	user    string
-	pass    string
-	client  *http.Client
+	ledgerSvc   *service.ReconciliationLedgerService
+	ruleSvc     *service.ReconciliationAccountRuleService
+	syncSvc     *service.ReconciliationSyncService
+	settingsSvc *service.ReconciliationA6SettingsService
 }
 
-// NewCompanionHandler 从环境变量构造代理处理器。未配置 COMPANION_BASE_URL 时
-// 所有接口返回 503 / COMPANION_NOT_CONFIGURED，管理后台页面据此展示引导态。
-func NewCompanionHandler() *CompanionHandler {
-	timeout := companionDefaultTimeout
-	if raw := strings.TrimSpace(os.Getenv(envCompanionTimeout)); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			timeout = parsed
-		}
-	}
+// NewCompanionHandler 构造对账管理端处理器。
+func NewCompanionHandler(
+	ledgerSvc *service.ReconciliationLedgerService,
+	ruleSvc *service.ReconciliationAccountRuleService,
+	syncSvc *service.ReconciliationSyncService,
+	settingsSvc *service.ReconciliationA6SettingsService,
+) *CompanionHandler {
 	return &CompanionHandler{
-		baseURL: strings.TrimRight(strings.TrimSpace(os.Getenv(envCompanionBaseURL)), "/"),
-		user:    strings.TrimSpace(os.Getenv(envCompanionAdminUser)),
-		pass:    os.Getenv(envCompanionAdminPass),
-		client:  &http.Client{Timeout: timeout},
+		ledgerSvc:   ledgerSvc,
+		ruleSvc:     ruleSvc,
+		syncSvc:     syncSvc,
+		settingsSvc: settingsSvc,
 	}
 }
 
-// Enabled 报告 Companion 代理是否已配置上游地址。
+// Enabled 报告对账能力是否可用。
+//
+// 内置实现恒为 true：这个返回值曾经表示「是否配置了上游地址」，
+// 现在对账就在本进程里，永远可用。
 func (h *CompanionHandler) Enabled() bool {
-	return h != nil && h.baseURL != ""
+	return h != nil && h.ledgerSvc != nil
 }
 
-// companionUpstream 是一次上游调用的结果。
-type companionUpstream struct {
-	status int
-	body   []byte
+// ==================== 错误映射 ====================
+
+// writeReconciliationError 把服务层错误翻译成管理端错误信封。
+//
+// 一律不使用 401/403：前端把 401 视为会话失效并跳登录页，对账功能出问题
+// 绝不能把管理员踢出去，因此配置类故障用 503、参数类故障用 400。
+func writeReconciliationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrReconciliationInvalidWindow):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: 时间窗口无效，请检查起止时间")
+	case errors.Is(err, service.ErrReconciliationProviderUnsupported):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: 只支持 A6 上游，Subarx 已下线")
+	case errors.Is(err, service.ErrReconciliationTokenNameRequired):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: A6 规则必须填写上游令牌名")
+	case errors.Is(err, service.ErrReconciliationTokenNameTooLong):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: 上游令牌名过长（上限 128 字符）")
+	case errors.Is(err, service.ErrReconciliationBillSourceUnavailable):
+		response.Error(c, http.StatusServiceUnavailable, "COMPANION_NOT_CONFIGURED: 尚未配置 A6 上游凭据")
+	case errors.Is(err, service.ErrReconciliationInvalidBaseURL):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: A6 基址必须是合法的 http/https URL")
+	case errors.Is(err, service.ErrReconciliationInvalidFxRate):
+		response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: 汇率必须大于 0 且不超过 100000")
+	default:
+		response.Error(c, http.StatusInternalServerError, "COMPANION_INTERNAL: "+err.Error())
+	}
 }
 
-// do 调用白名单内的上游路径，透传查询串，并附带服务端持有的 Basic 凭据。
-func (h *CompanionHandler) do(c *gin.Context, method, upstreamPath string, body []byte) (*companionUpstream, error) {
-	target, err := url.Parse(h.baseURL + upstreamPath)
-	if err != nil {
-		return nil, err
-	}
-	if raw := c.Request.URL.RawQuery; raw != "" {
-		target.RawQuery = raw
-	}
+// ==================== 参数与格式化 ====================
 
-	var reader io.Reader
-	if len(body) > 0 {
-		reader = bytes.NewReader(body)
+// companionWindow 解析时间窗口查询参数。
+//
+// 前端会在每个 GET 上额外注入 timezone 参数，这里只读取自己认识的键，
+// 其余参数自然被忽略，不会因此报错。
+func (h *CompanionHandler) companionWindow(c *gin.Context) (time.Time, time.Time, error) {
+	var fromPtr, toPtr *time.Time
+	if from, ok, err := parseCompanionTimeParam(c, "from"); err != nil {
+		return time.Time{}, time.Time{}, err
+	} else if ok {
+		fromPtr = &from
 	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), method, target.String(), reader)
-	if err != nil {
-		return nil, err
+	if to, ok, err := parseCompanionTimeParam(c, "to"); err != nil {
+		return time.Time{}, time.Time{}, err
+	} else if ok {
+		toPtr = &to
 	}
-	req.Header.Set("Accept", "application/json")
-	if len(body) > 0 {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if h.user != "" || h.pass != "" {
-		req.SetBasicAuth(h.user, h.pass)
-	}
-
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, companionMaxResponseBytes))
-	if err != nil {
-		return nil, err
-	}
-	return &companionUpstream{status: resp.StatusCode, body: payload}, nil
+	return h.ledgerSvc.ResolveWindow(fromPtr, toPtr)
 }
 
-// upstreamMessage 尽力从上游错误体里提取可读信息。
-func upstreamMessage(body []byte) string {
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 {
+func parseCompanionTimeParam(c *gin.Context, key string) (time.Time, bool, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false, service.ErrReconciliationInvalidWindow
+	}
+	return parsed.UTC(), true, nil
+}
+
+// companionAmount 把金额格式化成接口约定的 8 位小数字符串。
+func companionAmount(value float64) string {
+	return strconv.FormatFloat(value, 'f', 8, 64)
+}
+
+// companionOptionalAmount 在金额未知时返回空字符串。
+//
+// 未知与 0 是两回事：未知时显示空串让页面渲染「—」，显示 0 会被误读成
+// 「这笔上游没花钱」。
+func companionOptionalAmount(value float64, known bool) string {
+	if !known {
 		return ""
 	}
-	var envelope struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(trimmed, &envelope); err == nil {
-		if envelope.Error != "" {
-			return envelope.Error
-		}
-		if envelope.Message != "" {
-			return envelope.Message
-		}
-	}
-	text := string(trimmed)
-	if len(text) > 300 {
-		text = text[:300]
-	}
-	return text
+	return companionAmount(value)
 }
 
-// relay 以管理后台统一信封返回上游结果。
+// companionRFC3339 统一时间输出格式，保证前端 new Date() 可解析。
+func companionRFC3339(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// ==================== 状态 ====================
+
+// companionA6NotConfiguredDetail 是 A6 凭据缺失时的提示文案。
 //
-// 上游的鉴权/配置类错误刻意映射成 502 而不是原样透传 401/403：面板前端把 401 视为
-// 会话失效并跳登录页，若 Companion 凭据配错就会把管理员踢出去，难以排查。
-func (h *CompanionHandler) relay(c *gin.Context, method, upstreamPath string, body []byte) {
-	if !h.Enabled() {
-		response.Error(c, http.StatusServiceUnavailable, "COMPANION_NOT_CONFIGURED")
-		return
-	}
+// 必须点名「去哪个页面填」：只写「未配置」，管理员不知道该动哪里。
+const companionA6NotConfiguredDetail = "尚未配置 A6 上游凭据，请在页面「上游 A6 配置」中填写"
 
-	result, err := h.do(c, method, upstreamPath, body)
+// Status 返回对账功能的可用状态，供页面展示健康指示与故障原因。
+//
+// GET /admin/companion/status
+func (h *CompanionHandler) Status(c *gin.Context) {
+	payload := gin.H{"enabled": true, "healthy": true}
+	ctx := c.Request.Context()
+
+	status, err := h.syncSvc.Status(ctx)
 	if err != nil {
-		response.Error(c, http.StatusBadGateway, "COMPANION_UNREACHABLE: "+err.Error())
+		payload["healthy"] = false
+		payload["detail"] = err.Error()
+		response.Success(c, payload)
 		return
 	}
 
-	if result.status < http.StatusOK || result.status >= http.StatusMultipleChoices {
-		detail := upstreamMessage(result.body)
-		switch result.status {
-		case http.StatusBadRequest:
-			response.Error(c, http.StatusBadRequest, "COMPANION_BAD_REQUEST: "+detail)
-		case http.StatusUnauthorized, http.StatusForbidden:
-			response.Error(c, http.StatusBadGateway,
-				"COMPANION_AUTH_FAILED: 请检查 COMPANION_ADMIN_USER / COMPANION_ADMIN_PASSWORD 是否与 Companion 一致")
-		default:
-			response.Error(c, http.StatusBadGateway,
-				"COMPANION_UPSTREAM_"+strings.TrimSpace(http.StatusText(result.status))+": "+detail)
-		}
-		return
-	}
-
-	if len(bytes.TrimSpace(result.body)) == 0 {
-		response.Success(c, gin.H{"ok": true})
-		return
-	}
-
-	var payload json.RawMessage
-	if err := json.Unmarshal(result.body, &payload); err != nil {
-		response.Error(c, http.StatusBadGateway, "COMPANION_INVALID_RESPONSE: 上游返回了非 JSON 内容")
-		return
+	switch {
+	case !h.a6CredentialsReady(ctx):
+		// A6 没配时看板上会全是 0，此时报「健康」会让管理员以为数据本身就是 0，
+		// 所以这里必须明确报出不健康，并指出下一步动作。
+		payload["healthy"] = false
+		payload["detail"] = companionA6NotConfiguredDetail
+	case !status.BillSourceReady:
+		payload["healthy"] = false
+		payload["detail"] = "尚未配置 A6 上游凭据，上游账单无法采集；本地用量与规则功能正常"
+	case status.LastError != "":
+		payload["healthy"] = false
+		payload["detail"] = status.LastError
 	}
 	response.Success(c, payload)
 }
 
-// requestBody 读取并限制透传的请求体。
-func requestBody(c *gin.Context) ([]byte, error) {
-	if c.Request.Body == nil {
+// a6CredentialsReady 报告 A6 生效凭据（面板覆盖 → 配置 → 默认）是否齐备。
+//
+// 判定必须用生效值：管理员在页面上填完保存后，健康指示要立刻跟着变，
+// 不能等到重启进程才认新配置。
+func (h *CompanionHandler) a6CredentialsReady(ctx context.Context) bool {
+	if h == nil || h.settingsSvc == nil {
+		// 设置服务缺席（例如只装配了看板的最小化用法）时不冒充不健康，
+		// 让后面的 BillSourceReady 分支去表达。
+		return true
+	}
+	return h.settingsSvc.Effective(ctx).Configured()
+}
+
+// ==================== 上游 A6 配置 ====================
+
+// companionSettingsDTO 是 GET/PUT /settings 的 data。
+//
+// 令牌只以「是否已配置 + 脱敏提示」两种形态出现，任何情况下都不返回明文。
+type companionSettingsDTO struct {
+	A6BaseURL         string   `json:"a6_base_url"`
+	A6UserID          string   `json:"a6_user_id"`
+	A6TokenConfigured bool     `json:"a6_token_configured"`
+	A6TokenMask       string   `json:"a6_token_mask"`
+	FxUSDCNYRate      float64  `json:"fx_usd_cny_rate"`
+	OverrideKeys      []string `json:"override_keys"`
+}
+
+func toCompanionSettingsDTO(view service.ReconciliationA6SettingsView) companionSettingsDTO {
+	// 前端直接遍历 override_keys，null 会让它崩掉。
+	keys := view.OverrideKeys
+	if keys == nil {
+		keys = []string{}
+	}
+	return companionSettingsDTO{
+		A6BaseURL:         view.A6BaseURL,
+		A6UserID:          view.A6UserID,
+		A6TokenConfigured: view.A6TokenConfigured,
+		A6TokenMask:       view.A6TokenMask,
+		FxUSDCNYRate:      view.FxUSDCNYRate,
+		OverrideKeys:      keys,
+	}
+}
+
+// Settings 返回 A6 上游配置的生效状态。
+//
+// GET /admin/companion/settings
+func (h *CompanionHandler) Settings(c *gin.Context) {
+	if h == nil || h.settingsSvc == nil {
+		response.InternalError(c, "COMPANION_INTERNAL: A6 设置服务未装配")
+		return
+	}
+	response.Success(c, toCompanionSettingsDTO(h.settingsSvc.Effective(c.Request.Context()).View()))
+}
+
+// companionSettingsInputDTO 是 PUT /settings 的请求体。
+//
+// 指针字段是刻意的：只有它才能把「没传这个字段」与「传了空串」分开，
+// 而这两种含义完全不同（不改动 / 清除该覆盖）。
+type companionSettingsInputDTO struct {
+	A6BaseURL          *string  `json:"a6_base_url"`
+	A6UserID           *string  `json:"a6_user_id"`
+	A6AccessToken      *string  `json:"a6_access_token"`
+	FxUSDCNYRate       *float64 `json:"fx_usd_cny_rate"`
+	ClearA6AccessToken bool     `json:"clear_a6_access_token"`
+}
+
+// UpdateSettings 保存 A6 上游配置的面板覆盖值。
+//
+// 语义（前端按此实现）：
+//   - 字段缺省 = 不改动；
+//   - a6_base_url / a6_user_id 传空串 = 清除该覆盖，回落到配置/环境变量；
+//   - a6_access_token 缺省或空串 = 保持原值（「留空 = 不改」）；
+//     clear_a6_access_token = true 才清除覆盖；
+//   - fx_usd_cny_rate 必须 > 0 且 <= 100000。
+//
+// 返回与 GET 完全相同的结构，前端保存后可以直接用它刷新表单。
+//
+// PUT /admin/companion/settings
+func (h *CompanionHandler) UpdateSettings(c *gin.Context) {
+	if h == nil || h.settingsSvc == nil {
+		response.InternalError(c, "COMPANION_INTERNAL: A6 设置服务未装配")
+		return
+	}
+
+	var input companionSettingsInputDTO
+	if err := bindCompanionJSON(c, &input); err != nil {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: 请求体不是合法的 JSON: "+err.Error())
+		return
+	}
+
+	settings, err := h.settingsSvc.Update(c.Request.Context(), service.ReconciliationA6SettingsInput{
+		BaseURL:          input.A6BaseURL,
+		UserID:           input.A6UserID,
+		AccessToken:      input.A6AccessToken,
+		FxUSDCNYRate:     input.FxUSDCNYRate,
+		ClearAccessToken: input.ClearA6AccessToken,
+	})
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	response.Success(c, toCompanionSettingsDTO(settings.View()))
+}
+
+// ==================== 汇总 ====================
+
+type companionSummaryDTO struct {
+	From                   string `json:"from"`
+	To                     string `json:"to"`
+	Revenue                string `json:"revenue"`
+	MatchedRevenue         string `json:"matched_revenue"`
+	UpstreamCost           string `json:"upstream_cost"`
+	BilledUpstreamCost     string `json:"billed_upstream_cost"`
+	GrossProfit            string `json:"gross_profit"`
+	MarginPercent          string `json:"margin_percent"`
+	Matched                int64  `json:"matched"`
+	Unmatched              int64  `json:"unmatched"`
+	DownstreamMatched      int64  `json:"downstream_matched"`
+	DownstreamUnmatched    int64  `json:"downstream_unmatched"`
+	UpstreamUnmatched      int64  `json:"upstream_unmatched"`
+	RecordTotal            int64  `json:"record_total"`
+	BilledCount            int64  `json:"billed_count"`
+	CostPolicy             string `json:"cost_policy"`
+	CalculatedCount        int64  `json:"calculated_count"`
+	SubarxUnallocatedCost  string `json:"subarx_unallocated_cost"`
+	SubarxUnallocatedCount int64  `json:"subarx_unallocated_count"`
+	ProfitScope            string `json:"profit_scope"`
+	Currency               string `json:"currency"`
+	FxUSDCNY               string `json:"fx_usd_cny"`
+	FxSource               string `json:"fx_source"`
+	FxEffectiveAt          string `json:"fx_effective_at"`
+	FxStale                bool   `json:"fx_stale"`
+}
+
+// Summary 返回经营看板的汇总指标。
+//
+// GET /admin/companion/summary
+func (h *CompanionHandler) Summary(c *gin.Context) {
+	from, to, err := h.companionWindow(c)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	summary, err := h.ledgerSvc.Summary(c.Request.Context(), from, to)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	grossProfit := summary.MatchedRevenueCNY - summary.UpstreamCostCNY
+	marginPercent := 0.0
+	if summary.MatchedRevenueCNY > 0 {
+		marginPercent = grossProfit / summary.MatchedRevenueCNY * 100
+	}
+	fxRate := h.syncSvc.EffectiveFxRate(c.Request.Context())
+
+	response.Success(c, companionSummaryDTO{
+		From:                companionRFC3339(from),
+		To:                  companionRFC3339(to),
+		Revenue:             companionAmount(summary.RevenueCNY),
+		MatchedRevenue:      companionAmount(summary.MatchedRevenueCNY),
+		UpstreamCost:        companionAmount(summary.UpstreamCostCNY),
+		BilledUpstreamCost:  companionAmount(summary.UpstreamCostCNY),
+		GrossProfit:         companionAmount(grossProfit),
+		MarginPercent:       strconv.FormatFloat(marginPercent, 'f', 2, 64),
+		Matched:             summary.Matched,
+		Unmatched:           summary.Unmatched,
+		DownstreamMatched:   summary.Matched,
+		DownstreamUnmatched: summary.Unmatched,
+		UpstreamUnmatched:   summary.UpstreamUnmatched,
+		RecordTotal:         summary.Matched + summary.Unmatched + summary.UpstreamUnmatched,
+		BilledCount:         summary.BilledCount,
+		CostPolicy:          "billed_or_subarx_api_or_rule",
+		// calculated_count 与 billed_count 是一对：billed_count 是「成本来自真实账单」
+		// 的条数，calculated_count 是「成本由规则/接口推算得出」的条数。
+		// 收编后成本只来自 A6 真实账单，按规则折算成本的路径已不存在，故恒为 0——
+		// 与同为已下线机制的 subarx_unallocated_count 保持一致。不要改成 matched。
+		CalculatedCount:       0,
+		SubarxUnallocatedCost: companionAmount(0),
+		// Subarx 已下线，这两个字段保留是为了不改动前端契约。
+		SubarxUnallocatedCount: 0,
+		ProfitScope:            "matched_only",
+		Currency:               "CNY",
+		FxUSDCNY:               strconv.FormatFloat(fxRate, 'f', -1, 64),
+		FxSource:               "配置值或运行时覆盖",
+		// 汇率是记账口径而非实时牌价，没有「生效时刻」这种概念；
+		// 这里给本次读取的时刻，表示这份汇总用的是此刻的汇率。
+		FxEffectiveAt: time.Now().UTC().Format(time.RFC3339Nano),
+		FxStale:       false,
+	})
+}
+
+// ==================== 趋势 ====================
+
+type companionTimeseriesPointDTO struct {
+	Start             string `json:"start"`
+	Revenue           string `json:"revenue"`
+	UpstreamCost      string `json:"upstream_cost"`
+	GrossProfit       string `json:"gross_profit"`
+	Matched           int64  `json:"matched"`
+	Unmatched         int64  `json:"unmatched"`
+	UpstreamUnmatched int64  `json:"upstream_unmatched"`
+	RecordTotal       int64  `json:"record_total"`
+}
+
+type companionTimeseriesDTO struct {
+	From   string                        `json:"from"`
+	To     string                        `json:"to"`
+	Bucket string                        `json:"bucket"`
+	Points []companionTimeseriesPointDTO `json:"points"`
+}
+
+// Timeseries 返回经营看板的趋势分桶。
+//
+// GET /admin/companion/timeseries
+func (h *CompanionHandler) Timeseries(c *gin.Context) {
+	from, to, err := h.companionWindow(c)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	series, err := h.ledgerSvc.TimeSeries(c.Request.Context(), from, to)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	// 即使没有任何数据也要返回空数组而不是 null：前端直接对 points 做遍历。
+	points := make([]companionTimeseriesPointDTO, 0, len(series.Points))
+	for i := range series.Points {
+		point := &series.Points[i]
+		grossProfit := point.RevenueCNY - point.UpstreamCostCNY
+		points = append(points, companionTimeseriesPointDTO{
+			Start:             companionRFC3339(point.Start),
+			Revenue:           companionAmount(point.RevenueCNY),
+			UpstreamCost:      companionAmount(point.UpstreamCostCNY),
+			GrossProfit:       companionAmount(grossProfit),
+			Matched:           point.Matched,
+			Unmatched:         point.Unmatched,
+			UpstreamUnmatched: point.UpstreamUnmatched,
+			RecordTotal:       point.Matched + point.Unmatched + point.UpstreamUnmatched,
+		})
+	}
+
+	response.Success(c, companionTimeseriesDTO{
+		From:   companionRFC3339(from),
+		To:     companionRFC3339(to),
+		Bucket: series.BucketLabel,
+		Points: points,
+	})
+}
+
+// ==================== 明细 ====================
+
+type companionRequestRowDTO struct {
+	RecordType           string `json:"record_type"`
+	SourceID             int64  `json:"source_id"`
+	CreatedAt            string `json:"created_at"`
+	RequestID            string `json:"request_id"`
+	UpstreamRequestID    string `json:"upstream_request_id"`
+	UserID               int64  `json:"user_id"`
+	UserEmail            string `json:"user_email"`
+	APIKeyID             int64  `json:"api_key_id"`
+	AccountID            int64  `json:"account_id"`
+	GroupID              int64  `json:"group_id"`
+	GroupName            string `json:"group_name"`
+	Model                string `json:"model"`
+	InputTokens          int    `json:"input_tokens"`
+	OutputTokens         int    `json:"output_tokens"`
+	CacheTokens          int    `json:"cache_tokens"`
+	Revenue              string `json:"revenue"`
+	UpstreamCost         string `json:"upstream_cost"`
+	BilledUpstreamCost   string `json:"billed_upstream_cost"`
+	UpstreamCostOriginal string `json:"upstream_cost_original"`
+	UpstreamCurrency     string `json:"upstream_currency"`
+	GrossProfit          string `json:"gross_profit"`
+	CostSource           string `json:"cost_source"`
+	FxRateToCNY          string `json:"fx_rate_to_cny"`
+	CostSourceLabel      string `json:"cost_source_label"`
+	Matched              bool   `json:"matched"`
+}
+
+type companionRequestPageDTO struct {
+	Items      []companionRequestRowDTO `json:"items"`
+	Page       int                      `json:"page"`
+	PageSize   int                      `json:"page_size"`
+	Total      int64                    `json:"total"`
+	TotalPages int64                    `json:"total_pages"`
+	From       string                   `json:"from"`
+	To         string                   `json:"to"`
+	Status     string                   `json:"status"`
+}
+
+// Requests 返回经营看板的明细分页。
+//
+// GET /admin/companion/requests
+func (h *CompanionHandler) Requests(c *gin.Context) {
+	from, to, err := h.companionWindow(c)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	page := parseCompanionInt(c.Query("page"), 1)
+	pageSize := parseCompanionInt(c.Query("page_size"), service.ReconciliationDefaultPageSize)
+	status := strings.TrimSpace(c.Query("status"))
+
+	rows, total, err := h.ledgerSvc.Requests(c.Request.Context(), from, to, status, page, pageSize)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+	if pageSize < 1 || pageSize > service.ReconciliationMaxPageSize {
+		pageSize = service.ReconciliationDefaultPageSize
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	fxRate := h.syncSvc.EffectiveFxRate(c.Request.Context())
+
+	items := make([]companionRequestRowDTO, 0, len(rows))
+	for i := range rows {
+		row := &rows[i]
+
+		// 上游成本未知时输出空串而不是 0，避免页面把「还没对账」显示成「上游免费」。
+		upstreamCost := companionOptionalAmount(row.UpstreamCostCNY, row.HasUpstreamCost)
+		billedCost := upstreamCost
+		original := companionOptionalAmount(row.UpstreamCostOrig, row.HasUpstreamCost)
+		currency := row.UpstreamCurrency
+		if !row.HasUpstreamCost {
+			currency = ""
+		}
+		grossProfit, hasProfit := row.ReconciliationGrossProfitCNY()
+
+		rowFxRate := row.UpstreamFxRateCNY
+		if rowFxRate <= 0 {
+			rowFxRate = fxRate
+		}
+
+		items = append(items, companionRequestRowDTO{
+			RecordType:           row.RecordType,
+			SourceID:             row.SourceID,
+			CreatedAt:            companionRFC3339(row.CreatedAt),
+			RequestID:            row.RequestID,
+			UpstreamRequestID:    row.UpstreamRequestID,
+			UserID:               row.UserID,
+			UserEmail:            row.UserEmail,
+			APIKeyID:             row.APIKeyID,
+			AccountID:            row.AccountID,
+			GroupID:              row.GroupID,
+			GroupName:            row.GroupName,
+			Model:                row.Model,
+			InputTokens:          row.InputTokens,
+			OutputTokens:         row.OutputTokens,
+			CacheTokens:          row.CacheTokens,
+			Revenue:              companionAmount(row.RevenueCNY),
+			UpstreamCost:         upstreamCost,
+			BilledUpstreamCost:   billedCost,
+			UpstreamCostOriginal: original,
+			UpstreamCurrency:     currency,
+			GrossProfit:          companionOptionalAmount(grossProfit, hasProfit),
+			CostSource:           string(row.CostSource),
+			FxRateToCNY:          strconv.FormatFloat(rowFxRate, 'f', -1, 64),
+			// 标签必须非空：前端在未知 cost_source 时直接回落到这个字符串展示。
+			CostSourceLabel: service.ReconciliationCostSourceLabel(row.CostSource),
+			Matched:         row.Matched,
+		})
+	}
+
+	totalPages := int64(0)
+	if total > 0 {
+		totalPages = (total + int64(pageSize) - 1) / int64(pageSize)
+	}
+
+	response.Success(c, companionRequestPageDTO{
+		Items:      items,
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      total,
+		TotalPages: totalPages,
+		From:       companionRFC3339(from),
+		To:         companionRFC3339(to),
+		Status:     status,
+	})
+}
+
+// ==================== 账号规则 ====================
+
+type companionAccountRuleDTO struct {
+	AccountID          int64  `json:"account_id"`
+	Provider           string `json:"provider"`
+	TokenName          string `json:"token_name"`
+	Multiplier         string `json:"multiplier"`
+	Version            int64  `json:"version"`
+	Enabled            bool   `json:"enabled"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
+	Configured         bool   `json:"configured"`
+	Current            bool   `json:"current"`
+	GroupID            int64  `json:"group_id"`
+	GroupName          string `json:"group_name"`
+	GroupPriority      int    `json:"group_priority"`
+	AccountName        string `json:"account_name"`
+	AccountPlatform    string `json:"account_platform"`
+	AccountStatus      string `json:"account_status"`
+	AccountSchedulable bool   `json:"account_schedulable"`
+	UsageCount         int64  `json:"usage_count"`
+	FirstSeen          string `json:"first_seen"`
+	LastSeen           string `json:"last_seen"`
+	Models             string `json:"models"`
+}
+
+type companionAccountRuleListDTO struct {
+	Items                []companionAccountRuleDTO `json:"items"`
+	UnconfiguredAccounts int64                     `json:"unconfigured_accounts"`
+	From                 string                    `json:"from"`
+	To                   string                    `json:"to"`
+}
+
+func toCompanionAccountRuleDTO(view *service.ReconciliationAccountRuleView) companionAccountRuleDTO {
+	dto := companionAccountRuleDTO{
+		AccountID:          view.AccountID,
+		Provider:           view.Provider,
+		TokenName:          view.ExternalKey,
+		Version:            view.Version,
+		Enabled:            view.Enabled,
+		Configured:         view.Configured,
+		Current:            view.Current,
+		GroupID:            view.GroupID,
+		GroupName:          view.GroupName,
+		GroupPriority:      view.GroupPriority,
+		AccountName:        view.AccountName,
+		AccountPlatform:    view.AccountPlatform,
+		AccountStatus:      view.AccountStatus,
+		AccountSchedulable: view.AccountSchedulable,
+		UsageCount:         view.UsageCount,
+		// 前端把 models 当字符串渲染，多个模型用逗号分隔。
+		Models: strings.Join(view.Models, ", "),
+	}
+	if view.Multiplier != nil {
+		dto.Multiplier = strconv.FormatFloat(*view.Multiplier, 'f', -1, 64)
+	}
+	if !view.CreatedAt.IsZero() {
+		dto.CreatedAt = companionRFC3339(view.CreatedAt)
+	}
+	if !view.UpdatedAt.IsZero() {
+		dto.UpdatedAt = companionRFC3339(view.UpdatedAt)
+	}
+	if view.FirstSeen != nil {
+		dto.FirstSeen = companionRFC3339(*view.FirstSeen)
+	}
+	if view.LastSeen != nil {
+		dto.LastSeen = companionRFC3339(*view.LastSeen)
+	}
+	return dto
+}
+
+// AccountRules 返回账号规则视图。
+//
+// 列表包含全部账号（含范围内零调用的账号），因此永远不会是空页面，
+// 管理员可以为任何一个账号补规则。
+//
+// GET /admin/companion/account-rules
+func (h *CompanionHandler) AccountRules(c *gin.Context) {
+	from, to, err := h.companionWindow(c)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	list, err := h.ruleSvc.List(c.Request.Context(), from, to)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	items := make([]companionAccountRuleDTO, 0, len(list.Items))
+	for i := range list.Items {
+		items = append(items, toCompanionAccountRuleDTO(&list.Items[i]))
+	}
+
+	response.Success(c, companionAccountRuleListDTO{
+		Items:                items,
+		UnconfiguredAccounts: list.UnconfiguredAccounts,
+		From:                 companionRFC3339(list.From),
+		To:                   companionRFC3339(list.To),
+	})
+}
+
+type companionAccountRuleInputDTO struct {
+	Provider   string   `json:"provider"`
+	TokenName  string   `json:"token_name"`
+	Multiplier *float64 `json:"multiplier"`
+	Enabled    *bool    `json:"enabled"`
+}
+
+type companionAccountRuleSavedDTO struct {
+	Success bool                    `json:"success"`
+	Rule    companionAccountRuleDTO `json:"rule"`
+}
+
+// UpsertAccountRule 保存指定账号的上游规则。
+//
+// PUT /admin/companion/account-rules/:account_id
+func (h *CompanionHandler) UpsertAccountRule(c *gin.Context) {
+	accountID, ok := companionAccountID(c)
+	if !ok {
+		return
+	}
+
+	var input companionAccountRuleInputDTO
+	if err := bindCompanionJSON(c, &input); err != nil {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: 请求体不是合法的 JSON: "+err.Error())
+		return
+	}
+
+	// enabled 缺省视为启用：面板上勾掉才是停用，不传不应该等于停用。
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+
+	rule, err := h.ruleSvc.Upsert(c.Request.Context(), accountID, input.Provider, input.TokenName, input.Multiplier, enabled)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	response.Success(c, companionAccountRuleSavedDTO{
+		Success: true,
+		Rule:    toCompanionAccountRuleDTO(rule),
+	})
+}
+
+type companionAccountRuleDeletedDTO struct {
+	Success bool  `json:"success"`
+	Deleted int64 `json:"deleted"`
+}
+
+// DeleteAccountRule 删除指定账号的上游规则。
+//
+// DELETE /admin/companion/account-rules/:account_id
+func (h *CompanionHandler) DeleteAccountRule(c *gin.Context) {
+	accountID, ok := companionAccountID(c)
+	if !ok {
+		return
+	}
+
+	deleted, err := h.ruleSvc.Delete(c.Request.Context(), accountID)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+	response.Success(c, companionAccountRuleDeletedDTO{Success: true, Deleted: deleted})
+}
+
+// companionAccountID 解析并校验路径上的账号 ID。
+func companionAccountID(c *gin.Context) (int64, bool) {
+	raw := strings.TrimSpace(c.Param("account_id"))
+	accountID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: account_id 必须是数字账号 ID")
+		return 0, false
+	}
+	return accountID, true
+}
+
+// ==================== 同步动作 ====================
+
+type companionCollectResultDTO struct {
+	Success bool `json:"success"`
+}
+
+// Collect 触发一次同步采集。
+//
+// 立即返回而不是等采集跑完：前端 HTTP 超时是 30 秒，而上游单次拉取最长 90 秒，
+// 同步等待必然超时。采集在后台继续，进度体现在随后的汇总与明细里。
+//
+// POST /admin/companion/collect
+func (h *CompanionHandler) Collect(c *gin.Context) {
+	// 忽略请求体内容：窗口由服务端配置决定，不接受前端指定，避免被诱导去拉超长区间。
+	_, _ = io.Copy(io.Discard, io.LimitReader(c.Request.Body, companionMaxRequestBytes))
+
+	if !h.syncSvc.TriggerAsync(c.Request.Context()) {
+		response.Error(c, http.StatusConflict, "COMPANION_BAD_REQUEST: 已有一轮采集正在进行，请稍后再试")
+		return
+	}
+	response.Success(c, companionCollectResultDTO{Success: true})
+}
+
+type companionBackfillStatusDTO struct {
+	Status    string `json:"status"`
+	Running   bool   `json:"running"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Cursor    string `json:"cursor"`
+	Processed int64  `json:"processed"`
+	Error     string `json:"error"`
+}
+
+// A6BackfillStatus 返回 A6 历史回填的进度。
+//
+// GET /admin/companion/a6/backfill
+func (h *CompanionHandler) A6BackfillStatus(c *gin.Context) {
+	status, err := h.syncSvc.BackfillStatus(c.Request.Context())
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	dto := companionBackfillStatusDTO{
+		Status:    status.Status,
+		Running:   status.Running,
+		Processed: status.Processed,
+		Error:     status.Error,
+	}
+	if status.From != nil {
+		dto.From = companionRFC3339(*status.From)
+	}
+	if status.To != nil {
+		dto.To = companionRFC3339(*status.To)
+	}
+	if status.Cursor != nil {
+		dto.Cursor = companionRFC3339(*status.Cursor)
+	}
+	response.Success(c, dto)
+}
+
+type companionBackfillRequestDTO struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type companionBackfillStartedDTO struct {
+	Success bool   `json:"success"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+}
+
+// StartA6Backfill 启动 A6 历史账单回填。
+//
+// 与采集一样立即返回，回填在后台分段推进，进度由 A6BackfillStatus 查询。
+//
+// POST /admin/companion/a6/backfill
+func (h *CompanionHandler) StartA6Backfill(c *gin.Context) {
+	var input companionBackfillRequestDTO
+	if err := bindCompanionJSON(c, &input); err != nil {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: 请求体不是合法的 JSON: "+err.Error())
+		return
+	}
+
+	var fromPtr, toPtr *time.Time
+	if strings.TrimSpace(input.From) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(input.From))
+		if err != nil {
+			response.BadRequest(c, "COMPANION_BAD_REQUEST: from 需要 RFC3339 时间")
+			return
+		}
+		parsed = parsed.UTC()
+		fromPtr = &parsed
+	}
+	if strings.TrimSpace(input.To) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(input.To))
+		if err != nil {
+			response.BadRequest(c, "COMPANION_BAD_REQUEST: to 需要 RFC3339 时间")
+			return
+		}
+		parsed = parsed.UTC()
+		toPtr = &parsed
+	}
+
+	from, to, err := h.syncSvc.StartBackfill(c.Request.Context(), fromPtr, toPtr)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	response.Accepted(c, companionBackfillStartedDTO{
+		Success: true,
+		From:    companionRFC3339(from),
+		To:      companionRFC3339(to),
+	})
+}
+
+type companionUpstreamRecordDTO struct {
+	Provider            string  `json:"provider"`
+	UpstreamRequestID   string  `json:"upstream_request_id"`
+	Cost                float64 `json:"cost"`
+	Currency            string  `json:"currency"`
+	FxRateToCNY         float64 `json:"fx_rate_to_cny"`
+	OccurredAt          string  `json:"occurred_at"`
+	Model               string  `json:"model"`
+	TokenName           string  `json:"token_name"`
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	CacheReadTokens     int     `json:"cache_read_tokens"`
+	CacheCreationTokens int     `json:"cache_creation_tokens"`
+	CacheTokensTotal    int     `json:"cache_tokens_total"`
+	Source              string  `json:"source"`
+}
+
+type companionUpstreamImportRequestDTO struct {
+	Records []companionUpstreamRecordDTO `json:"records"`
+}
+
+type companionUpstreamImportResultDTO struct {
+	Success  bool  `json:"success"`
+	Imported int64 `json:"imported"`
+}
+
+// ImportUpstream 手动导入上游逐笔账单。
+//
+// 请求体既接受 {"records":[...]}，也接受顶层直接是一个数组，两种写法在旧实现里都被用过。
+//
+// POST /admin/companion/upstream/import
+func (h *CompanionHandler) ImportUpstream(c *gin.Context) {
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, companionMaxRequestBytes))
+	if err != nil {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: 读取请求体失败: "+err.Error())
+		return
+	}
+
+	records, err := decodeCompanionUpstreamRecords(body)
+	if err != nil {
+		response.BadRequest(c, "COMPANION_BAD_REQUEST: 请求体格式不正确: "+err.Error())
+		return
+	}
+
+	inputs := make([]service.ReconciliationUpstreamRecordInput, 0, len(records))
+	for i := range records {
+		record := &records[i]
+		input := service.ReconciliationUpstreamRecordInput{
+			Provider:          record.Provider,
+			UpstreamRequestID: record.UpstreamRequestID,
+			Cost:              record.Cost,
+			Currency:          record.Currency,
+			FxRateToCNY:       record.FxRateToCNY,
+			Model:             record.Model,
+			TokenName:         record.TokenName,
+			InputTokens:       record.InputTokens,
+			OutputTokens:      record.OutputTokens,
+			CacheReadTokens:   record.CacheReadTokens,
+			CacheCreation:     record.CacheCreationTokens,
+			CacheTokensTotal:  record.CacheTokensTotal,
+			Source:            record.Source,
+		}
+		if strings.TrimSpace(record.OccurredAt) != "" {
+			parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(record.OccurredAt))
+			if parseErr != nil {
+				response.BadRequest(c, "COMPANION_BAD_REQUEST: occurred_at 需要 RFC3339 时间")
+				return
+			}
+			parsed = parsed.UTC()
+			input.OccurredAt = &parsed
+		}
+		inputs = append(inputs, input)
+	}
+
+	imported, err := h.syncSvc.ImportUpstreamRecords(c.Request.Context(), inputs)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+	response.Success(c, companionUpstreamImportResultDTO{Success: true, Imported: imported})
+}
+
+// decodeCompanionUpstreamRecords 兼容两种请求体写法。
+func decodeCompanionUpstreamRecords(body []byte) ([]companionUpstreamRecordDTO, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
 		return nil, nil
 	}
-	return io.ReadAll(io.LimitReader(c.Request.Body, companionMaxRequestBytes))
+	if strings.HasPrefix(trimmed, "[") {
+		var records []companionUpstreamRecordDTO
+		if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+			return nil, err
+		}
+		return records, nil
+	}
+	var request companionUpstreamImportRequestDTO
+	if err := json.Unmarshal([]byte(trimmed), &request); err != nil {
+		return nil, err
+	}
+	return request.Records, nil
 }
 
-// Status 返回代理配置状态与 Companion 健康检查结果，供页面展示引导/告警态。
-func (h *CompanionHandler) Status(c *gin.Context) {
-	if !h.Enabled() {
-		response.Success(c, gin.H{"enabled": false, "healthy": false})
-		return
-	}
-	result, err := h.do(c, http.MethodGet, "/health", nil)
+// ==================== 小工具 ====================
+
+// bindCompanionJSON 解析可选请求体：空体不报错，按零值处理。
+func bindCompanionJSON(c *gin.Context, target any) error {
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, companionMaxRequestBytes))
 	if err != nil {
-		response.Success(c, gin.H{
-			"enabled": true,
-			"healthy": false,
-			"detail":  err.Error(),
-		})
-		return
+		return err
 	}
-	healthy := result.status >= http.StatusOK && result.status < http.StatusMultipleChoices
-	payload := gin.H{"enabled": true, "healthy": healthy, "status": result.status}
-	if !healthy {
-		payload["detail"] = upstreamMessage(result.body)
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return nil
 	}
-	response.Success(c, payload)
+	return json.Unmarshal([]byte(trimmed), target)
 }
 
-// Summary 代理经营看板汇总。
-func (h *CompanionHandler) Summary(c *gin.Context) {
-	h.relay(c, http.MethodGet, "/ops/api/summary", nil)
-}
-
-// Timeseries 代理经营看板趋势分桶。
-func (h *CompanionHandler) Timeseries(c *gin.Context) {
-	h.relay(c, http.MethodGet, "/ops/api/timeseries", nil)
-}
-
-// Requests 代理经营看板明细分页。
-func (h *CompanionHandler) Requests(c *gin.Context) {
-	h.relay(c, http.MethodGet, "/ops/api/requests", nil)
-}
-
-// AccountRules 代理上游账号规则视图。
-func (h *CompanionHandler) AccountRules(c *gin.Context) {
-	h.relay(c, http.MethodGet, "/ops/api/account-rules", nil)
-}
-
-// accountRulePath 校验并拼接账号规则的上游路径。
-func accountRulePath(c *gin.Context) (string, bool) {
-	accountID := strings.TrimSpace(c.Param("account_id"))
-	if !companionAccountIDPattern.MatchString(accountID) {
-		response.BadRequest(c, "account_id 必须是数字账号 ID")
-		return "", false
-	}
-	return "/ops/api/account-rules/" + accountID, true
-}
-
-// UpsertAccountRule 代理账号规则的新增/更新。
-func (h *CompanionHandler) UpsertAccountRule(c *gin.Context) {
-	path, ok := accountRulePath(c)
-	if !ok {
-		return
-	}
-	body, err := requestBody(c)
+// parseCompanionInt 解析查询串里的整数，非法或缺失时返回兜底值。
+func parseCompanionInt(raw string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
-		response.BadRequest(c, "读取请求体失败: "+err.Error())
-		return
+		return fallback
 	}
-	h.relay(c, http.MethodPut, path, body)
-}
-
-// DeleteAccountRule 代理账号规则的删除。
-func (h *CompanionHandler) DeleteAccountRule(c *gin.Context) {
-	path, ok := accountRulePath(c)
-	if !ok {
-		return
-	}
-	h.relay(c, http.MethodDelete, path, nil)
-}
-
-// Collect 代理「立即同步」。
-func (h *CompanionHandler) Collect(c *gin.Context) {
-	body, err := requestBody(c)
-	if err != nil {
-		response.BadRequest(c, "读取请求体失败: "+err.Error())
-		return
-	}
-	h.relay(c, http.MethodPost, "/ops/api/collect", body)
-}
-
-// A6BackfillStatus 代理 A6 历史回填状态查询。
-func (h *CompanionHandler) A6BackfillStatus(c *gin.Context) {
-	h.relay(c, http.MethodGet, "/ops/api/a6/backfill", nil)
-}
-
-// StartA6Backfill 代理 A6 历史回填启动。
-func (h *CompanionHandler) StartA6Backfill(c *gin.Context) {
-	body, err := requestBody(c)
-	if err != nil {
-		response.BadRequest(c, "读取请求体失败: "+err.Error())
-		return
-	}
-	h.relay(c, http.MethodPost, "/ops/api/a6/backfill", body)
-}
-
-// ImportUpstream 代理上游逐笔账单导入。
-func (h *CompanionHandler) ImportUpstream(c *gin.Context) {
-	body, err := requestBody(c)
-	if err != nil {
-		response.BadRequest(c, "读取请求体失败: "+err.Error())
-		return
-	}
-	h.relay(c, http.MethodPost, "/ops/api/upstream/import", body)
+	return parsed
 }

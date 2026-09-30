@@ -1,27 +1,65 @@
 /**
  * Admin Companion API endpoints
  *
- * Companion（sub2api-companion）是独立旁路服务，负责上游账单归集与经营对账。
- * 主服务在管理员鉴权组下提供 /admin/companion/* 代理接口，服务端持有 Companion 的
- * HTTP Basic 凭据并附加到上游请求上，浏览器侧永远拿不到该凭据。
+ * 经营对账已并入主服务进程（不再有独立的 sub2api-companion 容器）：主服务在管理员
+ * 鉴权组下提供 /admin/companion/* 接口，内部直接访问上游 A6 与本库数据。
  *
- * 因此本模块只与主服务通信，不直接访问 Companion。
+ * 上游 A6 的接入参数（站点基址、用户标识、访问令牌、汇率）可在管理后台页面上直接
+ * 配置，见 /admin/companion/settings。访问令牌只以密文保存在服务端，读取接口仅返回
+ * 脱敏串，明文既不会回传也不会出现在 URL 里。
  */
 
 import { apiClient } from '../client'
 
 // ==================== 状态 ====================
 
-/** GET /admin/companion/status 的响应（代理自身配置状态 + Companion /health 探测结果） */
+/** GET /admin/companion/status 的响应（上游可达性探测结果） */
 export interface CompanionStatus {
-  /** 主服务是否配置了 COMPANION_BASE_URL */
+  /** 主服务是否具备可用的上游 A6 配置（页面配置或环境变量任一来源） */
   enabled: boolean
-  /** Companion /health 是否可用（未配置时恒为 false） */
+  /** 上游 A6 是否可用（未配置访问令牌时恒为 false） */
   healthy: boolean
-  /** Companion /health 的 HTTP 状态码，仅在探测成功时返回 */
+  /** 上游探测的 HTTP 状态码，仅在探测成功时返回 */
   status?: number
   /** 探测失败原因（网络错误或上游错误体摘要） */
   detail?: string
+}
+
+// ==================== 上游 A6 配置 ====================
+
+/**
+ * GET /admin/companion/settings 的响应，也是 PUT 的响应。
+ *
+ * 后端把「页面配置」以覆盖项的形式叠加在环境变量之上：override_keys 列出当前由页面
+ * 配置生效的字段名，未列出的字段仍取环境变量或内置默认值。
+ */
+export interface CompanionSettings {
+  /** 上游 A6 站点基址，例如 https://a6.example.com */
+  a6_base_url: string
+  /** 上游 A6 用户标识 */
+  a6_user_id: string
+  /** 是否已经配置访问令牌（页面配置或环境变量任一来源） */
+  a6_token_configured: boolean
+  /** 访问令牌的脱敏串，仅供展示；未配置时为空串 */
+  a6_token_mask: string
+  /** A6 美元成本折算 CNY 使用的汇率 */
+  fx_usd_cny_rate: number
+  /** 当前由页面配置覆盖的字段名列表 */
+  override_keys: string[]
+}
+
+/**
+ * PUT /admin/companion/settings 的请求体。
+ *
+ * 字段缺省或空串表示不改动该字段；clear_a6_access_token 为 true 时清掉页面配置的
+ * 访问令牌，回落到环境变量。
+ */
+export interface CompanionSettingsInput {
+  a6_base_url?: string
+  a6_user_id?: string
+  a6_access_token?: string
+  fx_usd_cny_rate?: number
+  clear_a6_access_token?: boolean
 }
 
 // ==================== 时间窗口 ====================
@@ -362,10 +400,11 @@ export interface CompanionErrorInfo {
 /**
  * 把 apiClient 抛出的错误归类。
  *
- * - 503 + COMPANION_NOT_CONFIGURED：后端没有配置 COMPANION_BASE_URL，需要设置服务端环境变量；
- * - 502 + COMPANION_UNREACHABLE：Companion 不可达；
- * - 502 + COMPANION_AUTH_FAILED：服务端 Basic 凭据与 Companion 不一致；
- * - 400 + COMPANION_BAD_REQUEST：请求参数被 Companion 拒绝；
+ * - 503 + COMPANION_NOT_CONFIGURED：后端没有任何可用的上游配置；
+ * - 502 + COMPANION_UNREACHABLE：上游 A6 不可达；
+ * - 502 + COMPANION_AUTH_FAILED：访问令牌或用户标识与上游不一致；
+ * - 400 + COMPANION_BAD_REQUEST：请求参数被上游或代理拒绝；
+ * - 500 + COMPANION_INTERNAL：服务端内部错误，无专用分类，按未知错误展示原始 message；
  * - 其他：按上游错误或未知错误处理。
  */
 export function classifyCompanionError(error: unknown): CompanionErrorInfo {
@@ -402,6 +441,26 @@ export function classifyCompanionError(error: unknown): CompanionErrorInfo {
  */
 export async function getStatus(): Promise<CompanionStatus> {
   const { data } = await apiClient.get<CompanionStatus>('/admin/companion/status')
+  return data
+}
+
+/**
+ * 读取上游 A6 配置。
+ * 访问令牌只返回脱敏串（a6_token_mask），明文不会回传。
+ */
+export async function getSettings(): Promise<CompanionSettings> {
+  const { data } = await apiClient.get<CompanionSettings>('/admin/companion/settings')
+  return data
+}
+
+/**
+ * 保存上游 A6 配置，返回保存后的完整配置。
+ *
+ * 只把需要改动的字段放进 payload：缺省或空串 = 不改动该字段。
+ * 令牌明文只出现在请求体里，绝不放进 URL 或查询串。
+ */
+export async function updateSettings(input: CompanionSettingsInput): Promise<CompanionSettings> {
+  const { data } = await apiClient.put<CompanionSettings>('/admin/companion/settings', input)
   return data
 }
 
@@ -493,6 +552,8 @@ export async function importUpstream(
 
 export const companionAPI = {
   getStatus,
+  getSettings,
+  updateSettings,
   getSummary,
   getTimeseries,
   getRequests,

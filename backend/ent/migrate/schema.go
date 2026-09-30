@@ -1457,6 +1457,156 @@ var (
 			},
 		},
 	}
+	// ReconciliationAccountRulesColumns holds the columns for the "reconciliation_account_rules" table.
+	ReconciliationAccountRulesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "provider", Type: field.TypeString, Size: 16, Default: "a6"},
+		{Name: "external_key", Type: field.TypeString, Size: 128, Default: ""},
+		{Name: "multiplier", Type: field.TypeFloat64, Nullable: true, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "version", Type: field.TypeInt64, Default: 1},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+	}
+	// ReconciliationAccountRulesTable holds the schema information for the "reconciliation_account_rules" table.
+	ReconciliationAccountRulesTable = &schema.Table{
+		Name:       "reconciliation_account_rules",
+		Columns:    ReconciliationAccountRulesColumns,
+		PrimaryKey: []*schema.Column{ReconciliationAccountRulesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "reconciliationaccountrule_account_id",
+				Unique:  true,
+				Columns: []*schema.Column{ReconciliationAccountRulesColumns[3]},
+			},
+			{
+				Name:    "reconciliationaccountrule_provider_external_key",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationAccountRulesColumns[4], ReconciliationAccountRulesColumns[5]},
+			},
+		},
+	}
+	// ReconciliationSyncStateColumns holds the columns for the "reconciliation_sync_state" table.
+	ReconciliationSyncStateColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "key", Type: field.TypeString, Unique: true, Size: 100},
+		{Name: "value", Type: field.TypeString, Default: "", SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// ReconciliationSyncStateTable holds the schema information for the "reconciliation_sync_state" table.
+	ReconciliationSyncStateTable = &schema.Table{
+		Name:       "reconciliation_sync_state",
+		Columns:    ReconciliationSyncStateColumns,
+		PrimaryKey: []*schema.Column{ReconciliationSyncStateColumns[0]},
+	}
+	// ReconciliationUpstreamBillsColumns holds the columns for the "reconciliation_upstream_bills" table.
+	ReconciliationUpstreamBillsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "provider", Type: field.TypeString, Size: 16, Default: "a6"},
+		{Name: "upstream_request_id", Type: field.TypeString, Size: 128},
+		{Name: "occurred_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "billing_date", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "date"}},
+		{Name: "model", Type: field.TypeString, Size: 128, Default: ""},
+		{Name: "token_name", Type: field.TypeString, Size: 128, Default: ""},
+		{Name: "input_tokens", Type: field.TypeInt, Default: 0},
+		{Name: "output_tokens", Type: field.TypeInt, Default: 0},
+		{Name: "cache_read_tokens", Type: field.TypeInt, Default: 0},
+		{Name: "cache_creation_tokens", Type: field.TypeInt, Default: 0},
+		{Name: "cache_tokens_total", Type: field.TypeInt, Default: 0},
+		{Name: "cost_original", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "currency", Type: field.TypeString, Size: 8, Default: "USD"},
+		{Name: "fx_rate_to_cny", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "cost_cny", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "source", Type: field.TypeString, Size: 32, Default: "a6"},
+		{Name: "match_state", Type: field.TypeString, Size: 16, Default: "staging"},
+		{Name: "match_method", Type: field.TypeString, Size: 48, Default: ""},
+		{Name: "matched_usage_log_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "matched_account_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "raw", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "imported_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// ReconciliationUpstreamBillsTable holds the schema information for the "reconciliation_upstream_bills" table.
+	ReconciliationUpstreamBillsTable = &schema.Table{
+		Name:       "reconciliation_upstream_bills",
+		Columns:    ReconciliationUpstreamBillsColumns,
+		PrimaryKey: []*schema.Column{ReconciliationUpstreamBillsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "reconciliationupstreambill_provider_upstream_request_id",
+				Unique:  true,
+				Columns: []*schema.Column{ReconciliationUpstreamBillsColumns[3], ReconciliationUpstreamBillsColumns[4]},
+			},
+			{
+				Name:    "reconciliationupstreambill_matched_usage_log_id",
+				Unique:  true,
+				Columns: []*schema.Column{ReconciliationUpstreamBillsColumns[21]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "matched_usage_log_id IS NOT NULL",
+				},
+			},
+			{
+				Name:    "reconciliationupstreambill_occurred_at",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUpstreamBillsColumns[5]},
+			},
+			{
+				Name:    "reconciliationupstreambill_token_name_occurred_at",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUpstreamBillsColumns[8], ReconciliationUpstreamBillsColumns[5]},
+			},
+			{
+				Name:    "reconciliationupstreambill_match_state",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUpstreamBillsColumns[19]},
+			},
+		},
+	}
+	// ReconciliationUsageExtrasColumns holds the columns for the "reconciliation_usage_extras" table.
+	ReconciliationUsageExtrasColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "usage_log_id", Type: field.TypeInt64},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "rule_provider", Type: field.TypeString, Size: 16, Default: ""},
+		{Name: "rule_external_key", Type: field.TypeString, Size: 128, Default: ""},
+		{Name: "rule_version", Type: field.TypeInt64, Default: 0},
+		{Name: "revenue_original", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "fx_rate_to_cny", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "revenue_cny", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "collected_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+	}
+	// ReconciliationUsageExtrasTable holds the schema information for the "reconciliation_usage_extras" table.
+	ReconciliationUsageExtrasTable = &schema.Table{
+		Name:       "reconciliation_usage_extras",
+		Columns:    ReconciliationUsageExtrasColumns,
+		PrimaryKey: []*schema.Column{ReconciliationUsageExtrasColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "reconciliationusageextra_usage_log_id",
+				Unique:  true,
+				Columns: []*schema.Column{ReconciliationUsageExtrasColumns[3]},
+			},
+			{
+				Name:    "reconciliationusageextra_collected_at",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUsageExtrasColumns[11]},
+			},
+			{
+				Name:    "reconciliationusageextra_account_id_collected_at",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUsageExtrasColumns[4], ReconciliationUsageExtrasColumns[11]},
+			},
+			{
+				Name:    "reconciliationusageextra_rule_external_key",
+				Unique:  false,
+				Columns: []*schema.Column{ReconciliationUsageExtrasColumns[6]},
+			},
+		},
+	}
 	// RedeemCodesColumns holds the columns for the "redeem_codes" table.
 	RedeemCodesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2120,6 +2270,10 @@ var (
 		PromoCodesTable,
 		PromoCodeUsagesTable,
 		ProxiesTable,
+		ReconciliationAccountRulesTable,
+		ReconciliationSyncStateTable,
+		ReconciliationUpstreamBillsTable,
+		ReconciliationUsageExtrasTable,
 		RedeemCodesTable,
 		SecuritySecretsTable,
 		SettingsTable,
@@ -2235,6 +2389,18 @@ func init() {
 	ProxiesTable.ForeignKeys[0].RefTable = ProxiesTable
 	ProxiesTable.Annotation = &entsql.Annotation{
 		Table: "proxies",
+	}
+	ReconciliationAccountRulesTable.Annotation = &entsql.Annotation{
+		Table: "reconciliation_account_rules",
+	}
+	ReconciliationSyncStateTable.Annotation = &entsql.Annotation{
+		Table: "reconciliation_sync_state",
+	}
+	ReconciliationUpstreamBillsTable.Annotation = &entsql.Annotation{
+		Table: "reconciliation_upstream_bills",
+	}
+	ReconciliationUsageExtrasTable.Annotation = &entsql.Annotation{
+		Table: "reconciliation_usage_extras",
 	}
 	RedeemCodesTable.ForeignKeys[0].RefTable = GroupsTable
 	RedeemCodesTable.ForeignKeys[1].RefTable = UsersTable
