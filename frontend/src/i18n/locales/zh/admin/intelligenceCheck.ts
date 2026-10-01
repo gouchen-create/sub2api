@@ -23,6 +23,7 @@ export default {
       noModel: '未记录模型',
       accountMeta: '#{id} · {model}',
       accountMetaWithEffort: '#{id} · {model} · {effort}',
+      publicMetaWithEffort: '{model} · 智力等级 {effort}',
       detail: '{latency} · {time}',
       noArtifact: '暂无作品',
       pendingThumbnail: '作品加载中…',

@@ -23,6 +23,7 @@ export default {
       noModel: 'No model recorded',
       accountMeta: '#{id} · {model}',
       accountMetaWithEffort: '#{id} · {model} · {effort}',
+      publicMetaWithEffort: '{model} · effort {effort}',
       detail: '{latency} · {time}',
       noArtifact: 'No artwork yet',
       pendingThumbnail: 'Loading artwork…',

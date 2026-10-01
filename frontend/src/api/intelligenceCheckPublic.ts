@@ -1,6 +1,8 @@
 /**
  * Public Intelligence Check API endpoints
- * 「智力检测」作品墙：所有登录用户可见，后端已脱敏（不含账号名 / 上游标识 / 模型名）。
+ * 「智力检测」作品墙：所有登录用户可见。
+ * 后端已脱敏（不含账号 id / 账号名 / 上游标识），但会带出模型名与智力等级 ——
+ * 这面墙的意义正是「哪个模型、用什么智力等级，答得怎么样」。
  */
 
 import { apiClient } from './client'
@@ -16,6 +18,10 @@ export interface IntelligenceCheckPublicCard {
   has_artifact: boolean
   artifact_url?: string
   created_at: string
+  /** 本次跑测实际请求的模型名（如 glm-5.3-flashx）；记录里没有时后端不返回。 */
+  model_id?: string
+  /** 本次跑测使用的智力等级（如 low / medium / high / xhigh / max）。 */
+  reasoning_effort?: string
 }
 
 export interface IntelligenceCheckPublicWall {

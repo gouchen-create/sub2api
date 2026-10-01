@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -22,9 +23,12 @@ const (
 
 // IntelligenceCheckPublicHandler 是智力检测的**用户侧只读脱敏**接口。
 //
-// 与 admin 侧的关键差别：这里从不返回 account_id、账号名、上游标识与模型名。
+// 与 admin 侧的关键差别：这里从不返回 account_id、账号名与上游标识（UpstreamModel）。
 // 卡片只带一个从 1 开始的展示序号，作品通过 run id 单独取回，因此普通用户
 // 看得到「有几个账号在跑、跑得怎么样」，看不出这些账号是谁、接的哪家上游。
+//
+// 例外：模型名（ModelID）与智力等级（ReasoningEffort）对用户可见。作品墙的意义
+// 本就是「哪个模型、用什么智力等级，答得怎么样」，把这两项藏起来这面墙就没有信息量了。
 type IntelligenceCheckPublicHandler struct {
 	checkService *service.IntelligenceCheckService
 }
@@ -44,9 +48,16 @@ type publicIntelligenceCheckCard struct {
 	HasArtifact bool   `json:"has_artifact"`
 	ArtifactURL string `json:"artifact_url,omitempty"`
 	CreatedAt   string `json:"created_at"`
+	// ModelID 是本次跑测实际请求的模型名（如 glm-5.3-flashx）。
+	// 用 omitempty：极少数记录在跑测前就失败（没走到选模型那一步），此时整行不渲染，
+	// 前端也不该编一个「未记录模型」出来。
+	ModelID string `json:"model_id,omitempty"`
+	// ReasoningEffort 是本次跑测使用的智力等级（如 low / medium / high / xhigh / max）。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ListPublicRuns 返回脱敏后的作品墙卡片：每个参与过跑测的账号一张，按序号升序。
+// 卡片带模型名与智力等级（用户可见），但不带 account_id / 账号名 / 上游标识。
 func (h *IntelligenceCheckPublicHandler) ListPublicRuns(c *gin.Context) {
 	if h == nil || h.checkService == nil {
 		response.Success(c, gin.H{"items": []publicIntelligenceCheckCard{}, "total": 0})
@@ -73,6 +84,9 @@ func (h *IntelligenceCheckPublicHandler) ListPublicRuns(c *gin.Context) {
 			ErrorCode:   run.ErrorCode,
 			HasArtifact: run.HasHTML,
 			CreatedAt:   run.CreatedAt.Format(time.RFC3339),
+			// 模型名与智力等级照实带出：它们不泄露账号身份，却是这面墙的看点。
+			ModelID:         strings.TrimSpace(run.ModelID),
+			ReasoningEffort: strings.TrimSpace(run.ReasoningEffort),
 		}
 		if run.HasHTML {
 			card.ArtifactURL = "/api/v1/intelligence-check/runs/" + strconv.FormatInt(run.ID, 10) + "/artifact"

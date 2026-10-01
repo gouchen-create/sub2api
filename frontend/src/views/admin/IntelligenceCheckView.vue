@@ -60,7 +60,8 @@
               <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">
                 {{ card.displayName }}
               </p>
-              <!-- 普通用户侧的 metaLine 是空串（公开接口不给模型名），整行直接不渲染。 -->
+              <!-- metaLine 两种身份都有内容：管理员是「#账号id · 模型 · 等级」，
+                   普通用户是「模型 · 智力等级」（不带账号 id）；记录里缺模型信息时是空串，整行不渲染。 -->
               <p
                 v-if="card.metaLine"
                 class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400"
@@ -370,6 +371,21 @@ const formatDateTime = (value?: string) => {
 const formatLatency = (milliseconds: number) =>
   milliseconds > 0 ? `${(milliseconds / 1000).toFixed(1)}s` : '-'
 
+/**
+ * 普通用户卡片第二行的「模型 · 智力等级」。
+ * 模型名缺失时整行不渲染（不编造「未记录模型」——那会让人以为是系统记错了）；
+ * 只有模型、没有智力等级时只显示模型名。
+ * 这里刻意不带账号 id / 账号名 / 上游标识，那是管理员侧才给的信息。
+ */
+const formatPublicMeta = (modelId?: string, effort?: string) => {
+  const model = (modelId ?? '').trim()
+  if (!model) return ''
+  const level = (effort ?? '').trim()
+  return level
+    ? t('admin.intelligenceCheck.card.publicMetaWithEffort', { model, effort: level })
+    : model
+}
+
 // 跑测中卡片的耗时必须是「走着」的：后端要等跑完才回填 latency_ms，
 // 在此之前界面上只能自己从 created_at 起算，否则用户看到的是一个恒定的「-」，
 // 完全无法判断它是在跑还是已经卡死（这正是「以为卡住」的主要来源）。
@@ -400,7 +416,8 @@ const enabledAccounts = computed(() =>
 // 卡片完全由源状态派生，避免「本地状态」与「服务器状态」两份真相互相打架。
 // 身份不同 → 数据源不同：管理员由账号 + 跑测记录派生，普通用户由脱敏作品墙派生。
 const cards = computed<CheckCard[]>(() => {
-  // 普通用户分支：公开接口已经脱敏，展示序号即卡片键，模型名 / 上游身份一律不出现。
+  // 普通用户分支：展示序号即卡片键，账号 id / 账号名 / 上游身份一律不出现；
+  // 模型名与智力等级照实展示（公开接口已带出），这正是这面墙的看点。
   if (!isAdmin.value) {
     return publicCards.value.map(card => {
       const verdict = verdictOf(
@@ -411,8 +428,8 @@ const cards = computed<CheckCard[]>(() => {
       return {
         accountId: card.index,
         displayName: t('admin.intelligenceCheck.accountLabel', { index: card.index }),
-        // 脱敏：公开卡片没有模型名，留空而不是编一个「未记录模型」。
-        metaLine: '',
+        // 模型名与智力等级对用户可见；缺模型时留空，而不是编一个「未记录模型」。
+        metaLine: formatPublicMeta(card.model_id, card.reasoning_effort),
         detailLine: t('admin.intelligenceCheck.card.detail', {
           // 普通用户侧同样实时起算：跑测中只显示「-」会让人以为根本没在跑。
           latency: formatLatency(
