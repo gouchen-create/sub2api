@@ -621,6 +621,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.IntelligenceCheckStatusSyncEnabled != after.IntelligenceCheckStatusSyncEnabled {
 		changed = append(changed, "intelligence_check_status_sync_enabled")
 	}
+	if before.IntelligenceCheckStreamEnabled != after.IntelligenceCheckStreamEnabled {
+		changed = append(changed, "intelligence_check_stream_enabled")
+	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
 	}

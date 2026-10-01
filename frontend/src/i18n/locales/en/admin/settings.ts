@@ -51,6 +51,9 @@ export default {
         statusSyncEnabled: 'Sync review verdict with account status',
         statusSyncEnabledHint:
           'When on, a "failed" review marks the account as errored and a "passed" review restores it to normal. Off by default.',
+        streamEnabled: 'Run checks in streaming mode',
+        streamEnabledHint:
+          'On by default. In streaming mode every chunk resets the upstream gateway read timeout; turning it off returns the whole response at once, which is far more likely to hit an upstream gateway timeout (502/504) on long reasoning runs.',
       },
       features: {
         channelMonitor: {

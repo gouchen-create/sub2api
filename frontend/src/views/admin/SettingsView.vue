@@ -9135,6 +9135,23 @@
             </div>
           </div>
 
+          <!-- 跑测流式开关 -->
+          <div class="card">
+            <div class="p-6">
+              <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.intelligenceCheck.streamEnabled") }}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.intelligenceCheck.streamEnabledHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.intelligence_check_stream_enabled" />
+              </div>
+            </div>
+          </div>
+
           <!-- 单次运行上限 -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -10014,6 +10031,8 @@ type SettingsForm = Omit<
   model_plaza_pro_enabled: boolean;
   /** 智力检测：评审结论联动账号状态。表单必须绑定具体 boolean，不能是可选。 */
   intelligence_check_status_sync_enabled: boolean;
+  /** 智力检测：跑测是否以流式发起。默认开启流式（详见设置项说明）。 */
+  intelligence_check_stream_enabled: boolean;
   smtp_password: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
@@ -10349,6 +10368,7 @@ const form = reactive<SettingsForm>({
   intelligence_check_max_tokens: 32000,
   intelligence_check_max_runs_per_account: 20,
   intelligence_check_status_sync_enabled: false,
+  intelligence_check_stream_enabled: true,
   // Available Channels feature switch
   available_channels_enabled: false,
   // Subscription feature switch (user sidebar "My Subscriptions" entry)
@@ -11427,6 +11447,11 @@ async function loadSettings() {
     form.intelligence_check_status_sync_enabled = Boolean(
       settings.intelligence_check_status_sync_enabled
     );
+    // 后端缺这个键时按「开启流式」兜底，与设置项默认值保持一致。
+    form.intelligence_check_stream_enabled =
+      settings.intelligence_check_stream_enabled === undefined
+        ? true
+        : Boolean(settings.intelligence_check_stream_enabled);
     form.login_agreement_updated_at =
       settings.login_agreement_updated_at || "2026-03-31";
     form.login_agreement_documents =
@@ -12183,6 +12208,9 @@ async function saveSettings() {
         Number(form.intelligence_check_max_runs_per_account) || 20,
       intelligence_check_status_sync_enabled: Boolean(
         form.intelligence_check_status_sync_enabled
+      ),
+      intelligence_check_stream_enabled: Boolean(
+        form.intelligence_check_stream_enabled
       ),
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,

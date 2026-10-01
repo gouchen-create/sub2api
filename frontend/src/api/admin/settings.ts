@@ -760,6 +760,8 @@ export interface SystemSettings {
   intelligence_check_max_tokens: number;
   intelligence_check_max_runs_per_account: number;
   intelligence_check_status_sync_enabled: boolean;
+  /** 跑测是否以流式发起。后端键缺失时按 true 兜底。 */
+  intelligence_check_stream_enabled: boolean;
 
   // Available Channels feature switch
   available_channels_enabled: boolean;
@@ -1085,6 +1087,7 @@ export interface UpdateSettingsRequest {
   intelligence_check_max_tokens?: number;
   intelligence_check_max_runs_per_account?: number;
   intelligence_check_status_sync_enabled?: boolean;
+  intelligence_check_stream_enabled?: boolean;
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;

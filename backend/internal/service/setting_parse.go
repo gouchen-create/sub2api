@@ -209,6 +209,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyIntelligenceCheckMaxTokens:            "32000",
 		SettingKeyIntelligenceCheckMaxRunsPerAccount:    "20",
 		SettingKeyIntelligenceCheckStatusSyncEnabled:    "false",
+		// 默认流式：上游网关（如 nginx 的 proxy_read_timeout）对「整体响应」计时，
+		// 非流式必须等作品整份生成完才返回，长思考时极易撞上网关超时；
+		// 流式下每个增量到达都会重置读计时，因此默认走流式。
+		SettingKeyIntelligenceCheckStreamEnabled: "true",
 
 		// Grok compatibility defaults: cross-client mapping stays enabled unless
 		// operators explicitly disable it.
@@ -891,6 +895,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		IntelligenceCheckMaxMaxRunsPerAccount,
 	)
 	result.IntelligenceCheckStatusSyncEnabled = isTrueSettingValue(settings[SettingKeyIntelligenceCheckStatusSyncEnabled])
+	// 流式开关：缺失/空值视为开启流式（与默认值一致），避免老库升级后行为漂移成非流式。
+	result.IntelligenceCheckStreamEnabled = isTrueSettingValueOrDefault(settings[SettingKeyIntelligenceCheckStreamEnabled], true)
 
 	// Grok default mapping policy
 	result.GrokDefaultTextModel = strings.TrimSpace(settings[SettingKeyGrokDefaultTextModel])
@@ -1116,6 +1122,16 @@ func isTrueSettingValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+// isTrueSettingValueOrDefault 与 isTrueSettingValue 的区别是「键缺失」的语义：
+// 值为空（老库升级后尚未写入该键）时返回 expected，而不是一律 false。
+// 用于那些「默认开启」的开关，避免老库升级后行为被静默改成关闭。
+func isTrueSettingValueOrDefault(value string, expected bool) bool {
+	if strings.TrimSpace(value) == "" {
+		return expected
+	}
+	return isTrueSettingValue(value)
 }
 
 func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (string, error) {

@@ -462,6 +462,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		IntelligenceCheckMinMaxRunsPerAccount, IntelligenceCheckMaxMaxRunsPerAccount,
 	))
 	updates[SettingKeyIntelligenceCheckStatusSyncEnabled] = strconv.FormatBool(settings.IntelligenceCheckStatusSyncEnabled)
+	updates[SettingKeyIntelligenceCheckStreamEnabled] = strconv.FormatBool(settings.IntelligenceCheckStreamEnabled)
 
 	// Grok model mapping policy
 	if v := strings.TrimSpace(settings.GrokDefaultTextModel); v != "" {

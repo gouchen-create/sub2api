@@ -394,6 +394,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		IntelligenceCheckMaxTokens:                   settings.IntelligenceCheckMaxTokens,
 		IntelligenceCheckMaxRunsPerAccount:           settings.IntelligenceCheckMaxRunsPerAccount,
 		IntelligenceCheckStatusSyncEnabled:           settings.IntelligenceCheckStatusSyncEnabled,
+		IntelligenceCheckStreamEnabled:               settings.IntelligenceCheckStreamEnabled,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,

@@ -51,6 +51,9 @@ export default {
         statusSyncEnabled: '评审结论联动账号状态',
         statusSyncEnabledHint:
           '开启后，评审为「不通过」会把账号状态置为异常，「通过」则恢复正常。默认关闭。',
+        streamEnabled: '跑测走流式',
+        streamEnabledHint:
+          '默认开启。流式下上游每吐一段都会重置网关的读超时；关掉后改为一次性返回，长思考时更容易撞上上游网关超时（表现为 502/504）。',
       },
       features: {
         channelMonitor: {

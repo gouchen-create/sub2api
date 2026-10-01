@@ -406,6 +406,7 @@ const (
 	SettingKeyIntelligenceCheckMaxTokens            = "intelligence_check_max_tokens"           // 单次跑测最大输出 token
 	SettingKeyIntelligenceCheckMaxRunsPerAccount    = "intelligence_check_max_runs_per_account" // 每账号保留的跑测记录条数
 	SettingKeyIntelligenceCheckStatusSyncEnabled    = "intelligence_check_status_sync_enabled"  // 评审结论是否联动账号状态
+	SettingKeyIntelligenceCheckStreamEnabled        = "intelligence_check_stream_enabled"       // 跑测是否以流式发起（默认流式）
 
 	// 默认配置
 	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量

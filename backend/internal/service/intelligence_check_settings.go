@@ -64,6 +64,11 @@ type IntelligenceCheckGlobalSettings struct {
 	// 评审为 fail 时把账号置为 error，评审为 pass 时恢复 active。
 	// 默认关闭——联动会改动账号可用性，必须由管理员显式开启。
 	StatusSyncEnabled bool
+	// StreamEnabled 决定跑测以流式还是非流式发起。
+	// 默认开启流式：上游网关（nginx 的 proxy_read_timeout 之类）按「整体响应」计时，
+	// 非流式必须等作品整份生成完才返回，长思考时极易撞上网关超时；
+	// 流式下每个增量到达都会重置读计时，因此默认走流式。
+	StreamEnabled bool
 }
 
 // Interval 返回全局跑测间隔。
@@ -108,6 +113,7 @@ func DefaultIntelligenceCheckGlobalSettings() IntelligenceCheckGlobalSettings {
 		MaxTokens:                   IntelligenceCheckDefaultMaxTokens,
 		MaxRunsPerAccount:           IntelligenceCheckDefaultMaxRunsPerAccount,
 		StatusSyncEnabled:           false,
+		StreamEnabled:               true,
 	}
 }
 
@@ -172,6 +178,7 @@ func IntelligenceCheckGlobalSettingsFrom(settings *SystemSettings) IntelligenceC
 		IntelligenceCheckMinMaxRunsPerAccount, IntelligenceCheckMaxMaxRunsPerAccount,
 	)
 	resolved.StatusSyncEnabled = settings.IntelligenceCheckStatusSyncEnabled
+	resolved.StreamEnabled = settings.IntelligenceCheckStreamEnabled
 	return resolved
 }
 

@@ -218,6 +218,7 @@ type SystemSettings struct {
 	IntelligenceCheckMaxTokens                   int    `json:"intelligence_check_max_tokens"`
 	IntelligenceCheckMaxRunsPerAccount           int    `json:"intelligence_check_max_runs_per_account"`
 	IntelligenceCheckStatusSyncEnabled           bool   `json:"intelligence_check_status_sync_enabled"`
+	IntelligenceCheckStreamEnabled               bool   `json:"intelligence_check_stream_enabled"`
 
 	// Grok model mapping policy (admin settings; empty mapping falls back to these).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
