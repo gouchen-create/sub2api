@@ -143,6 +143,11 @@ ON CONFLICT (provider, upstream_request_id) DO NOTHING`
 // ListStaging 取出尚未完成首次匹配的账单。
 //
 // 按发生时间升序：先到的账单先匹配，符合真实结算顺序，也让失败重试的推进可见。
+//
+// 连同 raw 一起取回：匹配阶段需要报文里的 token_id（改名不变的稳定标识，
+// 规则写成 id:<数字> 时靠它命中）。token_id 没有独立列，只存在于 raw jsonb 里，
+// 因此这里把原始报文交给 service 层解析——「怎么取 ID」的实现只有一处，
+// 且能被单元测试直接覆盖（json.Number 与 float64 两种数字形态都出现过）。
 func (r *reconciliationUpstreamBillRepository) ListStaging(ctx context.Context, from, to time.Time, limit int) ([]service.ReconciliationUpstreamBill, error) {
 	if limit <= 0 {
 		limit = 1000
@@ -151,7 +156,7 @@ func (r *reconciliationUpstreamBillRepository) ListStaging(ctx context.Context, 
 	query := `
 SELECT id, provider, upstream_request_id, occurred_at, billing_date, model, token_name,
        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_tokens_total,
-       cost_original, currency, fx_rate_to_cny, cost_cny, source,
+       cost_original, currency, fx_rate_to_cny, cost_cny, source, raw,
        -- 孤儿宽限期的起算点必须取「入库时刻」。imported_at 是 DEFAULT now()，
        -- 只有手工导入的历史数据才可能为空，此时退回 created_at（同一次 INSERT 写入），
        -- 两者都空才回到 occurred_at 兜底。
@@ -173,6 +178,7 @@ LIMIT $3
 		var bill service.ReconciliationUpstreamBill
 		var payload service.ReconciliationUpstreamBillPayload
 		var billingDate sql.NullTime
+		var rawPayload []byte
 		if err := rows.Scan(
 			&bill.ID,
 			&payload.Provider,
@@ -191,6 +197,7 @@ LIMIT $3
 			&payload.FxRateToCNY,
 			&payload.CostCNY,
 			&payload.Source,
+			&rawPayload,
 			&bill.ImportedAt,
 		); err != nil {
 			return nil, err
@@ -198,6 +205,11 @@ LIMIT $3
 		if billingDate.Valid {
 			value := billingDate.Time
 			payload.BillingDate = &value
+		}
+		// raw 是尽力而为的补充信息：解析失败只意味着这条账单退回按名字匹配，
+		// 绝不能因此让整批账单读不出来（那会让匹配整体停摆）。
+		if len(rawPayload) > 0 {
+			_ = json.Unmarshal(rawPayload, &payload.Raw)
 		}
 		bill.Payload = payload
 		bills = append(bills, bill)
@@ -343,6 +355,92 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `) AND match_state = 'staging
 `
 	_, err := r.sql.ExecContext(ctx, query, args...)
 	return translatePersistenceError(err, nil, nil)
+}
+
+// ListUnmatched 取出窗口内已判定「匹配不上」的账单，供管理员显式重试。
+//
+// 只取重试判定必需的三个字段：ListStaging 那一整套列在这里用不上（匹配还没开始），
+// 而生产上 unmatched 可能有几千行，少取几列就少几解析。
+// raw 必须取回：规则写成 id:<数字> 时，判定依据是报文里的 token_id，而它没有独立列。
+func (r *reconciliationUpstreamBillRepository) ListUnmatched(ctx context.Context, from, to time.Time, limit int) ([]service.ReconciliationUpstreamBill, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	query := `
+SELECT id, token_name, raw
+FROM reconciliation_upstream_bills
+WHERE match_state = 'unmatched' AND occurred_at >= $1 AND occurred_at < $2
+ORDER BY occurred_at, id
+LIMIT $3
+`
+
+	rows, err := r.sql.QueryContext(ctx, query, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	bills := make([]service.ReconciliationUpstreamBill, 0, 16)
+	for rows.Next() {
+		var bill service.ReconciliationUpstreamBill
+		var payload service.ReconciliationUpstreamBillPayload
+		var rawPayload []byte
+		if err := rows.Scan(&bill.ID, &payload.TokenName, &rawPayload); err != nil {
+			return nil, err
+		}
+		// raw 解析失败只意味着这条账单退回按名字判定，不能让整批重试失败。
+		if len(rawPayload) > 0 {
+			_ = json.Unmarshal(rawPayload, &payload.Raw)
+		}
+		bill.Payload = payload
+		bills = append(bills, bill)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bills, nil
+}
+
+// RequeueUnmatched 把孤儿账单退回 staging，并重置孤儿宽限期的起算点。
+//
+// 为什么必须同时刷新 imported_at：宽限期由 graceBase() 决定，它优先读 imported_at。
+// 这些账单是几天前入库的，只改 match_state 的话，下一轮匹配立刻又按
+// 「导入早已超过宽限期」把它们判回孤儿——退回动作等于白做，账单还会在
+// 「上游待匹配」计数里消失，比不退回更难排查。
+// 代价是 imported_at 不再代表首次入库时刻（那份信息仍在 created_at 里），
+// 这是刻意的取舍：在本实现里 imported_at 承担的是「本轮重试的起算点」。
+//
+// guard 用 match_state = 'unmatched'：并发下若某条账单刚被匹配成功，
+// 必须放过它，绝不能把已经对好的账退回队列。
+func (r *reconciliationUpstreamBillRepository) RequeueUnmatched(ctx context.Context, billIDs []int64) (int64, error) {
+	if len(billIDs) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, 0, len(billIDs))
+	args := make([]any, 0, len(billIDs))
+	for i, billID := range billIDs {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+		args = append(args, billID)
+	}
+
+	query := `
+UPDATE reconciliation_upstream_bills
+SET match_state = 'staging',
+    imported_at = now(),
+    updated_at = now()
+WHERE id IN (` + strings.Join(placeholders, ",") + `) AND match_state = 'unmatched'
+`
+	result, err := r.sql.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, translatePersistenceError(err, nil, nil)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, translatePersistenceError(err, nil, nil)
+	}
+	return affected, nil
 }
 
 // ProviderTokenNames 返回窗口内出现过账单的上游令牌名及各自账单数。

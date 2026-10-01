@@ -83,7 +83,7 @@ describe('CompanionView 上游状态优先级', () => {
     api.getSummary.mockResolvedValue({ currency: 'CNY', fx_usd_cny: '6.71', fx_source: 'page' })
     api.getTimeseries.mockResolvedValue({ points: [], bucket: '1小时' })
     api.getRequests.mockResolvedValue({ items: [], total: 0 })
-    api.getAccountRules.mockResolvedValue({ items: [], unconfigured_accounts: 0 })
+    api.getAccountRules.mockResolvedValue({ items: [], unconfigured_accounts: 0, unconfigured_groups: 0, groups: [] })
   })
 
   it('缺凭据时显示「未配置」而不是「不可达」——后端此时同样返回 healthy:false', async () => {
@@ -209,7 +209,7 @@ describe('CompanionView 采集积压提示', () => {
     api.getSummary.mockResolvedValue({ currency: 'CNY', fx_usd_cny: '6.71', fx_source: 'page' })
     api.getTimeseries.mockResolvedValue({ points: [], bucket: '1小时' })
     api.getRequests.mockResolvedValue({ items: [], total: 0 })
-    api.getAccountRules.mockResolvedValue({ items: [], unconfigured_accounts: 0 })
+    api.getAccountRules.mockResolvedValue({ items: [], unconfigured_accounts: 0, unconfigured_groups: 0, groups: [] })
     api.getSettings.mockResolvedValue(settings())
   })
 

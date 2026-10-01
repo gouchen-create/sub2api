@@ -484,6 +484,10 @@ func (s *ReconciliationSyncService) SyncA6Bills(ctx context.Context, from, to ti
 // importBills 把上游账单换算并幂等写入。
 //
 // 导入时把换算数字抄到每条账单上，落库即冻结：汇率后来变了也不能回头改历史账单。
+//
+// 同时从 raw 报文里解出上游令牌 ID（token_id）。它不落成数据库列——原始报文
+// 已经整份存进 raw jsonb，这里只是让同一进程内的下游（例如手工导入后立刻触发的匹配）
+// 拿到稳定标识，不必为了一个数字再解析一遍 JSON。
 func (s *ReconciliationSyncService) importBills(ctx context.Context, bills []ReconciliationUpstreamBillPayload) (int64, error) {
 	if len(bills) == 0 {
 		return 0, nil
@@ -491,6 +495,9 @@ func (s *ReconciliationSyncService) importBills(ctx context.Context, bills []Rec
 
 	fxRate := s.EffectiveFxRate(ctx)
 	for i := range bills {
+		if bills[i].TokenID <= 0 {
+			bills[i].TokenID = reconciliationTokenIDFromRaw(bills[i].Raw)
+		}
 		if bills[i].FxRateToCNY <= 0 {
 			bills[i].FxRateToCNY = fxRate
 		}
@@ -500,6 +507,47 @@ func (s *ReconciliationSyncService) importBills(ctx context.Context, bills []Rec
 	}
 
 	return s.billRepo.UpsertBatch(ctx, bills)
+}
+
+// reconciliationTokenIDFromRaw 从上游原始报文里取出令牌 ID。
+//
+// raw 的实际类型是 map[string]any，但里面数字的 Go 类型取决于解码方式：
+// A6 客户端用 json.Decoder(UseNumber) 解出的是 json.Number，
+// 手工重放（以及直接构造 map 的测试）传进来的则是 float64。
+// 这里统一交给 a6Int64 收敛，不在本函数里穷举类型——为同一个字段写两份类型开关，
+// 迟早漏掉一种形态，而漏掉的后果是「按 ID 匹配静默失效」。
+//
+// 返回 0 表示这条报文没有可用的稳定标识（字段缺失、为 null、或不是正整数）。
+func reconciliationTokenIDFromRaw(raw map[string]any) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	// 驼峰写法一并容纳：上游字段命名在 token_name/tokenName 上已经出现过两种写法，
+	// 这里沿用同一套容忍策略，避免下次上游改名时又静默失配。
+	value, ok := a6Lookup(raw, "token_id", "tokenId")
+	if !ok {
+		return 0
+	}
+	tokenID, ok := a6Int64(value)
+	if !ok || tokenID <= 0 {
+		return 0
+	}
+	return tokenID
+}
+
+// reconciliationPayloadTokenID 返回账单的令牌 ID：结构体上已解析好的直接用，
+// 否则从 raw 兜底解析。
+//
+// 兜底是必要的：匹配阶段读的是**数据库里**的账单，而 token_id 没有独立列，
+// 只能随 raw 一起取回来再解析（见 ReconciliationUpstreamBillRepository.ListStaging）。
+func reconciliationPayloadTokenID(payload *ReconciliationUpstreamBillPayload) int64 {
+	if payload == nil {
+		return 0
+	}
+	if payload.TokenID > 0 {
+		return payload.TokenID
+	}
+	return reconciliationTokenIDFromRaw(payload.Raw)
 }
 
 func (s *ReconciliationSyncService) recordSyncError(ctx context.Context, cause error) {
@@ -514,6 +562,16 @@ func (s *ReconciliationSyncService) recordSyncError(ctx context.Context, cause e
 	}
 }
 
+// reconciliationTokenKey 是匹配阶段「上游令牌身份」的缓存键。
+//
+// 必须同时带名字与 ID：改名之后，名字与 ID 的组合才是唯一身份；
+// 只按名字缓存会把「名字相同、ID 不同」的两条账单算成同一个账号集合。
+// tokenID 为 0 表示这条账单没有稳定标识，此键等价于旧行为（只按名字）。
+type reconciliationTokenKey struct {
+	name    string
+	tokenID int64
+}
+
 // MatchStaging 给尚未匹配的账单寻找对应的本站调用。
 //
 // 返回 (本轮成功匹配数, 判定为孤儿的账单数, 错误)。
@@ -526,8 +584,8 @@ func (s *ReconciliationSyncService) MatchStaging(ctx context.Context, from, to t
 		return 0, 0, nil
 	}
 
-	// 账号解析结果按令牌名缓存，避免同一令牌反复查库。
-	accountCache := make(map[string][]int64, 8)
+	// 账号解析结果按「令牌名 + 令牌 ID」缓存，避免同一令牌反复查库。
+	accountCache := make(map[reconciliationTokenKey][]int64, 8)
 	now := time.Now().UTC()
 
 	var matched int64
@@ -536,13 +594,18 @@ func (s *ReconciliationSyncService) MatchStaging(ctx context.Context, from, to t
 	for i := range bills {
 		bill := &bills[i]
 
-		accountIDs, ok := accountCache[bill.Payload.TokenName]
+		// 令牌 ID 改名不变，优先从 raw 报文里取；取不到（历史手工导入）返回 0，
+		// 此时退回纯名字匹配，与旧行为一致。
+		tokenID := reconciliationPayloadTokenID(&bill.Payload)
+		cacheKey := reconciliationTokenKey{name: strings.TrimSpace(bill.Payload.TokenName), tokenID: tokenID}
+
+		accountIDs, ok := accountCache[cacheKey]
 		if !ok {
-			accountIDs, err = s.resolveAccountIDsForToken(ctx, bill.Payload.TokenName)
+			accountIDs, err = s.resolveAccountIDsForToken(ctx, cacheKey.name, cacheKey.tokenID)
 			if err != nil {
 				return matched, 0, err
 			}
-			accountCache[bill.Payload.TokenName] = accountIDs
+			accountCache[cacheKey] = accountIDs
 		}
 
 		if len(accountIDs) > 0 {
@@ -579,6 +642,88 @@ func (s *ReconciliationSyncService) MatchStaging(ctx context.Context, from, to t
 	return matched, int64(len(orphanIDs)), nil
 }
 
+// RequeueUnmatched 把「当前规则确实能解析出账号」的孤儿账单退回匹配队列，返回退回条数。
+//
+// 存在的理由（生产实测的硬缺陷）：账单一旦被判成 unmatched，ListStaging 就再也不会捞它，
+// 于是「管理员改对了令牌名」这个动作对历史账单完全无效：
+// staging=37 / unmatched=3500 / matched=0，把 3 个填错的令牌名改对后本可匹配上 2487 条，
+// 它们却全卡在 unmatched 里永远不复活。这个方法是那条唯一的复活通道，
+// 由管理员显式点击触发，不做成常驻后台任务。
+//
+// 只退「能解析出账号」的那些，不做无差别退回：无差别退回会把一批注定匹配不上的账单
+// 反复送回宽限期、每轮重扫、刷满日志，真正该重试的反而被淹没。
+//
+// 判定复用匹配阶段的 reconciliationRuleMatchesToken：规则里写 id:<数字> 的
+// （改名不变的稳定标识）同样能通过守卫。这一点不能下推到 SQL 里用
+// `external_key = token_name` 之类的条件代替——那种写法既认不出逗号分隔的多个标识，
+// 也看不见只存在于 raw 报文里的 token_id，会让 Task A 的 ID 匹配在最需要它的场景下失效。
+func (s *ReconciliationSyncService) RequeueUnmatched(ctx context.Context, from, to time.Time) (int64, error) {
+	bills, err := s.billRepo.ListUnmatched(ctx, from, to, s.requeueUnmatchedLimit())
+	if err != nil {
+		return 0, err
+	}
+	if len(bills) == 0 {
+		return 0, nil
+	}
+
+	rules, err := s.ruleRepo.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	ids := make([]int64, 0, len(bills))
+	for i := range bills {
+		payload := &bills[i].Payload
+		if !reconciliationRulesMatchToken(rules, payload.TokenName, reconciliationTokenIDFromRaw(payload.Raw)) {
+			continue
+		}
+		ids = append(ids, bills[i].ID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	requeued, err := s.billRepo.RequeueUnmatched(ctx, ids)
+	if err != nil {
+		return requeued, err
+	}
+	logger.LegacyPrintf("service.reconciliation_sync",
+		"requeue_unmatched: candidates=%d eligible=%d requeued=%d from=%s to=%s",
+		len(bills), len(ids), requeued, from.Format(time.RFC3339), to.Format(time.RFC3339))
+	return requeued, nil
+}
+
+// requeueUnmatchedLimit 是单次退回的条数上限。
+//
+// 与单轮匹配上限（StagingLimit）保持一致：退回的这批必须能被随后的一次匹配完整覆盖，
+// 否则多退出来的账单会滞留在 staging——既不在「上游待匹配」计数里，也没被匹配上，
+// 这种「看起来消失了」的状态比不退更糟。剩下的一批下次再点即可（动作是幂等的）。
+func (s *ReconciliationSyncService) requeueUnmatchedLimit() int {
+	if s.cfg.StagingLimit > 0 {
+		return s.cfg.StagingLimit
+	}
+	return 1000
+}
+
+// reconciliationRulesMatchToken 判断启用的规则里是否至少有一条覆盖这条账单的令牌。
+//
+// 名字与 ID 都没有的账单直接判定为不可重试：退回去也只会再孤儿一次。
+func reconciliationRulesMatchToken(rules []ReconciliationAccountRule, tokenName string, tokenID int64) bool {
+	tokenName = strings.TrimSpace(tokenName)
+	if tokenName == "" && tokenID <= 0 {
+		return false
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		if reconciliationRuleMatchesToken(rule.ExternalKey, tokenName, tokenID) {
+			return true
+		}
+	}
+	return false
+}
+
 // graceBase 返回孤儿宽限期的起算时刻。
 //
 // 优先用账单入库时间（imported_at）：它才是文档 6.3 说的「账单导入后」。
@@ -594,17 +739,23 @@ func graceBase(bill *ReconciliationUpstreamBill) time.Time {
 	return bill.Payload.OccurredAt
 }
 
-// resolveAccountIDsForToken 找出某个上游令牌可能对应的本站账号。
+// resolveAccountIDsForToken 找出某条上游账单可能对应的本站账号。
 //
-// 查两处，这是修复「令牌改名后历史账单变孤儿」的关键：
-//  1. 当前规则表 —— 令牌名仍然在用的账号
-//  2. 历史快照表 —— 调用发生时该账号用的是这个名字的账号
+// 令牌的身份由**名字 + ID** 共同表达，两者命中任意一个都算候选，查三处：
+//  1. 当前规则表 —— 规则的令牌标识集合里含有这个令牌名，或含有这个 token_id；
+//  2. 历史快照表 —— 调用发生时该账号用的是这个名字（按账单上的名字反查）。
 //
-// 旧实现只查第 1 处，管理员把令牌从 0.12 改名成 0.15-claude 之后，
-// 所有旧账单立刻无法回配，线上实测影响 1157 条。
-func (s *ReconciliationSyncService) resolveAccountIDsForToken(ctx context.Context, tokenName string) ([]int64, error) {
+// 第 2 处是修复「令牌改名后历史账单变孤儿」的关键：旧实现只查第 1 处，
+// 管理员把令牌从 0.12 改名成 0.15-claude 之后，所有旧账单立刻无法回配，
+// 线上实测影响 1157 条。
+//
+// 第 1 处的 ID 通道是修复「上游改令牌名」的关键：历史账单里冻结的是 glm-3.5-95%，
+// A6 后台现在叫 glm，两边名字对不上；但账单报文里的 token_id 与当前令牌 ID 相同，
+// 于是规则写成 "glm, id:41210" 就能同时覆盖新名与历史名，改名不再造成失配。
+func (s *ReconciliationSyncService) resolveAccountIDsForToken(ctx context.Context, tokenName string, tokenID int64) ([]int64, error) {
 	tokenName = strings.TrimSpace(tokenName)
-	if tokenName == "" {
+	// 名字与 ID 都没有时无事可做：直接返回空候选集，账单会留在 staging 等宽限期。
+	if tokenName == "" && tokenID <= 0 {
 		return nil, nil
 	}
 
@@ -616,7 +767,7 @@ func (s *ReconciliationSyncService) resolveAccountIDsForToken(ctx context.Contex
 	seen := make(map[int64]struct{}, 4)
 	ids := make([]int64, 0, 4)
 	for _, rule := range rules {
-		if !rule.Enabled || rule.ExternalKey != tokenName {
+		if !rule.Enabled || !reconciliationRuleMatchesToken(rule.ExternalKey, tokenName, tokenID) {
 			continue
 		}
 		if _, exists := seen[rule.AccountID]; exists {
@@ -626,19 +777,50 @@ func (s *ReconciliationSyncService) resolveAccountIDsForToken(ctx context.Contex
 		ids = append(ids, rule.AccountID)
 	}
 
-	historical, err := s.extrasRepo.ListAccountIDsByRuleKeys(ctx, []string{tokenName})
-	if err != nil {
-		return nil, err
-	}
-	for _, accountID := range historical {
-		if _, exists := seen[accountID]; exists {
-			continue
+	// 历史快照只按名字反查：快照冻结的是「调用发生时该账号配的令牌标识」，
+	// 用账单上的名字去比对，才能覆盖「规则后来改成了别的写法」的情况。
+	// 名字为空（只配了 id: 的规则）时没有可反查的名字，跳过即可——
+	// 那种情况下当前规则表的 ID 通道已经给出了账号集合。
+	if tokenName != "" {
+		historical, err := s.extrasRepo.ListAccountIDsByRuleKeys(ctx, []string{tokenName})
+		if err != nil {
+			return nil, err
 		}
-		seen[accountID] = struct{}{}
-		ids = append(ids, accountID)
+		for _, accountID := range historical {
+			if _, exists := seen[accountID]; exists {
+				continue
+			}
+			seen[accountID] = struct{}{}
+			ids = append(ids, accountID)
+		}
 	}
 
 	return ids, nil
+}
+
+// reconciliationRuleMatchesToken 判断一条规则的令牌标识集合是否覆盖账单上的令牌。
+//
+// 解析一律走 ParseReconciliationExternalKeys，不在匹配侧另写一套逗号/前缀判断：
+// 校验、展示、匹配三处共用同一个解析实现，才不会出现「保存时允许、匹配时不认」这种
+// 最难排查的口径漂移。
+func reconciliationRuleMatchesToken(externalKey, tokenName string, tokenID int64) bool {
+	names, tokenIDs := ParseReconciliationExternalKeys(externalKey)
+
+	if tokenID > 0 {
+		for _, candidate := range tokenIDs {
+			if candidate == tokenID {
+				return true
+			}
+		}
+	}
+	if tokenName != "" {
+		for _, candidate := range names {
+			if candidate == tokenName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findMatch 按四级顺序为一条账单寻找唯一对应的调用，返回命中的候选与匹配方式。

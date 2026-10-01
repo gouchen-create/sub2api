@@ -84,6 +84,17 @@ export default {
       refreshFailed: 'Refresh failed'
     },
 
+    requeue: {
+      button: 'Requeue unmatched bills',
+      confirmTitle: 'Requeue unmatched bills',
+      confirmBody:
+        'This is a write operation: bills in the selected time range that are marked "upstream unmatched" are pushed back into the matching queue and one matching round runs immediately, so bill states in the database change. Only bills that the currently enabled rules can resolve to an account are requeued, never every orphan; at most 1000 bills per click, so with thousands of orphans you need to click several times. Requeued bills receive a fresh orphan grace period, so click repeatedly within a short while — if you wait longer than the grace period, the earlier batch becomes orphaned again. Continue?',
+      running: 'Requeueing and retrying…',
+      success: 'Requeued {requeued} bills, {matched} matched',
+      moreHint: 'Click again if bills are still left',
+      failed: 'Failed to requeue unmatched bills'
+    },
+
     range: {
       today: 'Today',
       h24: '24 hours',
@@ -200,11 +211,11 @@ export default {
 
     rules: {
       title: 'Accounts × current group rules',
-      subtitle: 'One row per account (including accounts not linked to any group); one group can bind several upstream channels',
+      subtitle: 'One row per group, plus one sub-row per channel account in that group; a group can bind several upstream channels and each account keeps its own A6 token name',
       empty: 'The main site has no channel account to show',
       loadFailed: 'Failed to load account rules',
-      unconfiguredCount: '{count} accounts with usage need a rule',
-      allConfigured: 'Every account with usage is configured',
+      unconfiguredGroupsCount: '{count} groups with usage need a rule',
+      allConfigured: 'Every group with usage is configured',
       columns: {
         group: 'Current group',
         account: 'Channel account',
@@ -232,7 +243,13 @@ export default {
       unconfigured: 'Not configured',
       versionTooltip: 'Rule version v{version}; edits only affect newly collected calls, history keeps its snapshot',
       noSnapshot: 'No rule snapshot yet',
+      groupLabel: '{name} · #{id}',
+      unnamedGroup: 'Unnamed group',
       groupMeta: 'Group #{id} · {count} channels',
+      groupAccountsInline: '{count} accounts listed here',
+      groupTokenKeysHint: 'Token identifiers already configured in this group (deduplicated; "id:" entries are upstream token IDs)',
+      groupConfiguredHint: 'Every account in this group is configured',
+      groupUnconfiguredHint: 'Some accounts in this group are not configured yet; fill them in on the account sub-rows below',
       recentGroupMeta: 'Group #{id}',
       recentGroupDeleted: 'Group #{id} (deleted)',
       noGroup: 'Not linked to a current group',

@@ -332,11 +332,43 @@ export interface CompanionAccountRule {
   recent_group_name: string
 }
 
+/**
+ * 分组视图（Companion /ops/api/account-rules 的 groups 元素）：一个分组一行。
+ *
+ * 业务单位是分组，而一个分组下可能有多个渠道账号，每个账号对应的上游令牌名又不一样，
+ * 所以规则仍然按账号保存，逐个放在 accounts 里（元素结构与 items 元素完全相同）。
+ */
+export interface CompanionAccountRuleGroup {
+  /** 分组 ID；0 表示组内账号不属于任何分组 */
+  group_id: number
+  group_name: string
+  group_priority: number
+  /** 该分组的真实渠道数（与主站分组页 account_count 同口径，只算未软删账号） */
+  group_channel_count: number
+  /** 组内全部账号都已配置才为 true */
+  configured: boolean
+  /** 组内账号在**范围内**的用量合计 */
+  usage_count: number
+  /** 组内已配置的令牌标识（去重） */
+  token_keys: string[]
+  /** 组内渠道账号 */
+  accounts: CompanionAccountRule[]
+}
+
 /** GET /admin/companion/account-rules 的响应 */
 export interface CompanionAccountRuleList extends CompanionTimeWindowParams {
+  /**
+   * 按账号的扁平列表。
+   *
+   * 表格渲染已改用 groups；这个字段保留不变，仍有调用方依赖它的扁平结构。
+   */
   items: CompanionAccountRule[]
   /** 范围内有调用但尚未配置规则的账号数 */
   unconfigured_accounts: number
+  /** 范围内有调用但尚未配置规则的分组数（不属于任何分组的账号算一个分组） */
+  unconfigured_groups: number
+  /** 按分组组织的规则视图 */
+  groups: CompanionAccountRuleGroup[]
   from: string
   to: string
 }
@@ -374,6 +406,21 @@ export interface CompanionAccountRuleDeleted {
 /** POST /admin/companion/collect 的响应 */
 export interface CompanionCollectResult {
   success: boolean
+}
+
+/**
+ * POST /admin/companion/requeue-unmatched 的响应。
+ *
+ * requeued 是本次退回「待匹配」的孤儿账单条数；matched 是退回之后紧接着那一轮
+ * 实际匹配上的条数——管理员点这个动作就是为了看「改对的规则到底有没有生效」，
+ * 只看 requeued 是看不出结果的，两个数字都必须展示。
+ */
+export interface CompanionRequeueUnmatchedResult {
+  success: boolean
+  requeued: number
+  matched: number
+  from: string
+  to: string
 }
 
 /** GET /admin/companion/a6/backfill 的响应 */
@@ -572,6 +619,28 @@ export async function collect(): Promise<CompanionCollectResult> {
   return data
 }
 
+/**
+ * 「退回重试未匹配账单」：把当前窗口内、当前启用规则能解析出账号的孤儿账单退回
+ * 待匹配队列，并立刻重试一轮匹配（动作幂等）。
+ *
+ * 这是写操作，会改数据库里的账单状态，必须由管理员显式触发（孤儿不会自动重试）。
+ * 单次最多退回 1000 条（等于后端单轮匹配上限），孤儿多时要连续点几次；被退回的
+ * 账单会重新获得一段孤儿宽限期，所以要在宽限期内连续点，间隔过久先前那批会重新变回孤儿。
+ *
+ * 窗口由查询参数传入，与同页 summary / requests / account-rules 共用同一套解析，
+ * 因此必须传页面当前窗口，不要另造窗口。请求体为空（后端显式忽略 body）。
+ */
+export async function requeueUnmatched(
+  params?: CompanionTimeWindowParams
+): Promise<CompanionRequeueUnmatchedResult> {
+  const { data } = await apiClient.post<CompanionRequeueUnmatchedResult>(
+    '/admin/companion/requeue-unmatched',
+    null,
+    { params }
+  )
+  return data
+}
+
 /** 读取 A6 历史账单回填进度 */
 export async function getA6BackfillStatus(): Promise<CompanionA6BackfillStatus> {
   const { data } = await apiClient.get<CompanionA6BackfillStatus>('/admin/companion/a6/backfill')
@@ -615,6 +684,7 @@ export const companionAPI = {
   upsertAccountRule,
   deleteAccountRule,
   collect,
+  requeueUnmatched,
   getA6BackfillStatus,
   startA6Backfill,
   importUpstream

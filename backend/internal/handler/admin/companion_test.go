@@ -104,6 +104,24 @@ var companionAccountRuleContractKeys = []string{
 	"recent_model", "recent_group_id", "recent_group_name",
 }
 
+// companionAccountRuleListContractKeys 是 CompanionAccountRuleList 声明的全部字段（6 个）。
+//
+// groups / unconfigured_groups 与 items / unconfigured_accounts 并存：
+// 前端新版本按分组渲染（groups），旧版本只认 items。缺任何一侧都不会报错，
+// 只会静默渲染成空状态，因此这里逐字锁死。
+var companionAccountRuleListContractKeys = []string{
+	"items", "unconfigured_accounts", "unconfigured_groups", "groups", "from", "to",
+}
+
+// companionAccountRuleGroupContractKeys 是 CompanionAccountRuleGroup 声明的全部字段（8 个）。
+//
+// 字段名与 CompanionView.vue 里 groups[].xxx 的读取逐字对应：
+// 前端用 .length 与 ?? [] 混用，token_keys / accounts 必须是数组而不是 null。
+var companionAccountRuleGroupContractKeys = []string{
+	"group_id", "group_name", "group_priority", "group_channel_count",
+	"configured", "usage_count", "token_keys", "accounts",
+}
+
 // companionBackfillStatusContractKeys 是 CompanionA6BackfillStatus 的字段（7 个）。
 var companionBackfillStatusContractKeys = []string{
 	"status", "running", "from", "to", "cursor", "processed", "error",
@@ -408,6 +426,10 @@ type companionBillStub struct {
 
 	mu       sync.Mutex
 	imported []service.ReconciliationUpstreamBillPayload
+	// unmatched 是窗口内的孤儿账单（重试接口的输入）。
+	unmatched []service.ReconciliationUpstreamBill
+	// requeued 记录被要求退回 staging 的账单 ID。
+	requeued []int64
 }
 
 func (s *companionBillStub) UpsertBatch(_ context.Context, bills []service.ReconciliationUpstreamBillPayload) (int64, error) {
@@ -419,6 +441,23 @@ func (s *companionBillStub) UpsertBatch(_ context.Context, bills []service.Recon
 
 func (s *companionBillStub) ListStaging(_ context.Context, _, _ time.Time, _ int) ([]service.ReconciliationUpstreamBill, error) {
 	return nil, nil
+}
+
+func (s *companionBillStub) ListUnmatched(_ context.Context, _, _ time.Time, _ int) ([]service.ReconciliationUpstreamBill, error) {
+	return s.unmatched, nil
+}
+
+func (s *companionBillStub) RequeueUnmatched(_ context.Context, billIDs []int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requeued = append(s.requeued, billIDs...)
+	return int64(len(billIDs)), nil
+}
+
+func (s *companionBillStub) requeuedIDs() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.requeued...)
 }
 
 func (s *companionBillStub) importedCount() int {
@@ -647,6 +686,7 @@ func newCompanionHarness(options ...companionHarnessOption) *companionHarness {
 	group.PUT("/account-rules/:account_id", handler.UpsertAccountRule)
 	group.DELETE("/account-rules/:account_id", handler.DeleteAccountRule)
 	group.POST("/collect", handler.Collect)
+	group.POST("/requeue-unmatched", handler.RequeueUnmatched)
 	group.GET("/a6/backfill", handler.A6BackfillStatus)
 	group.POST("/a6/backfill", handler.StartA6Backfill)
 	group.POST("/upstream/import", handler.ImportUpstream)
@@ -1528,7 +1568,7 @@ func TestCompanionAccountRulesExactFieldSet(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 
 	data := companionDecodeObject(t, envelope.Data)
-	companionRequireExactKeys(t, data, []string{"items", "unconfigured_accounts", "from", "to"}, "CompanionAccountRuleList")
+	companionRequireExactKeys(t, data, companionAccountRuleListContractKeys, "CompanionAccountRuleList")
 
 	items := companionJSONArray(t, data, "items")
 	require.Len(t, items, 2)
@@ -1537,6 +1577,55 @@ func TestCompanionAccountRulesExactFieldSet(t *testing.T) {
 		require.Truef(t, isObject, "items[%d] 必须是对象", index)
 		companionRequireExactKeys(t, row, companionAccountRuleContractKeys, "CompanionAccountRule")
 	}
+}
+
+// TestCompanionAccountRulesGroupsContract 分组视角的键集与语义必须与前端逐字对齐。
+//
+// 前端 CompanionView.vue 用 groups[].token_keys / groups[].accounts 渲染分组卡片，
+// 并把 group_id == 0 当作「不属于任何分组」的桶。少一个键前端不会报错，
+// 只会静默渲染成空状态，因此这里连键集带语义一起锁死。
+func TestCompanionAccountRulesGroupsContract(t *testing.T) {
+	harness := newCompanionHarness()
+
+	recorder, envelope := harness.do(t, http.MethodGet, "/account-rules", "")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	data := companionDecodeObject(t, envelope.Data)
+	assert.Equal(t, float64(1), companionJSONNumber(t, data, "unconfigured_groups"),
+		"未配置分组数按分组计：账号 2 不属于任何分组且没有规则")
+
+	groups := companionJSONArray(t, data, "groups")
+	require.Len(t, groups, 2)
+
+	configured, isObject := groups[0].(map[string]any)
+	require.True(t, isObject, "groups[0] 必须是对象")
+	companionRequireExactKeys(t, configured, companionAccountRuleGroupContractKeys, "CompanionAccountRuleGroup")
+	assert.Equal(t, float64(2), companionJSONNumber(t, configured, "group_id"))
+	assert.Equal(t, "默认分组", companionJSONString(t, configured, "group_name"))
+	assert.Equal(t, float64(1), companionJSONNumber(t, configured, "group_priority"))
+	assert.Equal(t, float64(5), companionJSONNumber(t, configured, "usage_count"))
+	assert.Equal(t, float64(3), companionJSONNumber(t, configured, "group_channel_count"),
+		"分组渠道数是主站口径（挂了多少渠道），不是本表格里的行数")
+	assert.True(t, companionJSONBool(t, configured, "configured"))
+	assert.Equal(t, []any{"token-a"}, companionJSONArray(t, configured, "token_keys"))
+
+	groupAccounts := companionJSONArray(t, configured, "accounts")
+	require.Len(t, groupAccounts, 1)
+	firstAccount, isObject := groupAccounts[0].(map[string]any)
+	require.True(t, isObject, "groups[0].accounts[0] 必须是对象")
+	assert.Equal(t, float64(1), companionJSONNumber(t, firstAccount, "account_id"))
+	assert.Equal(t, "token-a", companionJSONString(t, firstAccount, "token_name"),
+		"分组内的账号行与 items 形状一致，前端不必维护两套渲染逻辑")
+
+	// 没有归任何分组的账号落在 group_id == 0、group_name 为空串的桶里。
+	ungrouped, isObject := groups[1].(map[string]any)
+	require.True(t, isObject, "groups[1] 必须是对象")
+	assert.Equal(t, float64(0), companionJSONNumber(t, ungrouped, "group_id"))
+	assert.Equal(t, "", companionJSONString(t, ungrouped, "group_name"))
+	assert.Equal(t, float64(2), companionJSONNumber(t, ungrouped, "usage_count"))
+	assert.False(t, companionJSONBool(t, ungrouped, "configured"))
+	assert.Empty(t, companionJSONArray(t, ungrouped, "token_keys"), "未配置的账号不贡献令牌标识")
+	assert.Len(t, companionJSONArray(t, ungrouped, "accounts"), 1)
 }
 
 // TestCompanionAccountRulesZeroAccountsIsEmptyArray 零账号时 items 也必须是空数组。
@@ -1797,6 +1886,58 @@ func TestCompanionNeverReturns401Or403WhenDegraded(t *testing.T) {
 }
 
 // ==================== 8. 同步动作 ====================
+
+// companionRequeueUnmatchedContractKeys 是「退回重试」结果的字段集（5 个）。
+var companionRequeueUnmatchedContractKeys = []string{"success", "requeued", "matched", "from", "to"}
+
+// TestCompanionRequeueUnmatchedOnlyRequeuesEligibleBills 是任务 C 的接口级回归测试。
+//
+// 孤儿账单不会自动重试，管理员改对令牌名之后必须有一条显式的复活通道：
+// 这里断言只把「当前规则能解析出账号」的账单退回去，规则对不上的照旧留在孤儿状态，
+// 避免注定匹配不上的账单反复占用孤儿宽限期。
+func TestCompanionRequeueUnmatchedOnlyRequeuesEligibleBills(t *testing.T) {
+	harness := newCompanionHarness()
+	// 预置两条孤儿账单：第一条的令牌名与账号 1 的规则（token-a）一致，第二条无人认领。
+	harness.bills.unmatched = []service.ReconciliationUpstreamBill{
+		{
+			ID: 101,
+			Payload: service.ReconciliationUpstreamBillPayload{
+				TokenName: "token-a",
+				Raw:       map[string]any{"token_id": float64(41210), "token_name": "token-a"},
+			},
+		},
+		{
+			ID: 102,
+			Payload: service.ReconciliationUpstreamBillPayload{
+				TokenName: "someone-else-token",
+				Raw:       map[string]any{"token_id": float64(999), "token_name": "someone-else-token"},
+			},
+		},
+	}
+
+	recorder, envelope := harness.do(t, http.MethodPost, "/requeue-unmatched", "")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	data := companionDecodeObject(t, envelope.Data)
+	companionRequireExactKeys(t, data, companionRequeueUnmatchedContractKeys, "CompanionRequeueUnmatchedResult")
+	assert.True(t, companionJSONBool(t, data, "success"))
+	assert.Equal(t, float64(1), companionJSONNumber(t, data, "requeued"), "只退回规则能解析出账号的那一条")
+	assert.Equal(t, float64(0), companionJSONNumber(t, data, "matched"), "本桩的 staging 为空，随后一轮匹配匹配不到东西")
+	companionRequireRFC3339(t, companionJSONString(t, data, "from"), "from")
+	companionRequireRFC3339(t, companionJSONString(t, data, "to"), "to")
+
+	assert.Equal(t, []int64{101}, harness.bills.requeuedIDs())
+}
+
+// 时间窗口非法时按既有约定返回 400（且带 COMPANION_BAD_REQUEST），不能是 401/403。
+func TestCompanionRequeueUnmatchedBadWindow(t *testing.T) {
+	harness := newCompanionHarness()
+
+	recorder, envelope := harness.do(t, http.MethodPost, "/requeue-unmatched?from=not-a-time", "")
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, envelope.Message, "COMPANION_BAD_REQUEST")
+	assert.Empty(t, harness.bills.requeuedIDs(), "窗口非法时不得退回任何账单")
+}
 
 // TestCompanionCollectSuccessContract 采集成功返回 200 + success = true。
 func TestCompanionCollectSuccessContract(t *testing.T) {

@@ -199,6 +199,17 @@ type ReconciliationUpstreamBillPayload struct {
 	CostCNY          float64
 	Source           string
 	Raw              map[string]any
+
+	// TokenID 是上游令牌的稳定标识（A6 账单原始报文里的 token_id）。
+	//
+	// 它不是数据库列，也不写进任何迁移：原始报文已经整份存进 raw jsonb，
+	// token_id 就在其中，再开一列属于冗余。它只在本进程内传递——
+	// 导入时从 raw 解析出来，匹配阶段直接用它比对规则里的 id:<数字>。
+	//
+	// 为什么需要它：上游会改令牌名（glm-3.5-95% → glm），改名后历史账单按名字
+	// 永远失配；而 token_id 改名不变。0 表示这条来源没有给出稳定标识
+	// （例如手工导入的账单，报文里没有 token_id），此时只能退回按名字匹配。
+	TokenID int64
 }
 
 // ReconciliationUsageExtra 是调用侧扩展快照。
@@ -236,6 +247,9 @@ type ReconciliationUpstreamBillRepository interface {
 	// 冲突时只更新匹配相关字段之外的元信息，绝不覆盖成本与汇率。
 	UpsertBatch(ctx context.Context, bills []ReconciliationUpstreamBillPayload) (int64, error)
 	// ListStaging 取出尚未完成首次匹配的账单。
+	//
+	// 返回的 Payload 必须带上 Raw（数据库里的 raw jsonb 原样带回）：匹配阶段要从
+	// 报文里取 token_id 这个改名不变的稳定标识，而它没有独立列。
 	ListStaging(ctx context.Context, from, to time.Time, limit int) ([]ReconciliationUpstreamBill, error)
 	// FindDirectMatchCandidates 按上游请求 ID 找出可匹配的下游调用。
 	FindDirectMatchCandidates(ctx context.Context, upstreamRequestID string) ([]ReconciliationMatchCandidate, error)
@@ -245,6 +259,19 @@ type ReconciliationUpstreamBillRepository interface {
 	MarkMatched(ctx context.Context, billID, usageLogID, accountID int64, method string) error
 	// MarkUnmatched 把账单标记为确认匹配不上。
 	MarkUnmatched(ctx context.Context, billIDs []int64) error
+	// ListUnmatched 取出窗口内已判定「匹配不上」的账单，供管理员显式重试。
+	//
+	// 只填重试判定必需的三个字段：ID、Payload.TokenName、Payload.Raw
+	// （raw 里才有 token_id，判定 id:<数字> 形式的规则必须用它）。
+	// 之所以专用一个方法而不是复用 ListStaging：ListStaging 的谓词是
+	// match_state='staging'，而这里要的正是不在那批里的账单。
+	ListUnmatched(ctx context.Context, from, to time.Time, limit int) ([]ReconciliationUpstreamBill, error)
+	// RequeueUnmatched 把指定的孤儿账单退回 staging，并重启它们的孤儿宽限期。
+	//
+	// 只对当前仍是 unmatched 的行生效（并发下已被匹配的行不能被退回）。
+	// 实现必须同时刷新 imported_at：宽限期以它为起算点（见 graceBase），
+	// 不刷新的话这些「很久以前入库」的账单下一轮立刻又被判回孤儿，重试等于没做。
+	RequeueUnmatched(ctx context.Context, billIDs []int64) (int64, error)
 	// ProviderTokenNames 返回窗口内出现过账单的上游令牌名及其账单数。
 	ProviderTokenNames(ctx context.Context, from, to time.Time) (map[string]int64, error)
 	// CountUnmatched 统计窗口内孤儿账单数。

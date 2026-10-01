@@ -83,6 +83,17 @@ export default {
       refreshFailed: '刷新失败'
     },
 
+    requeue: {
+      button: '退回重试未匹配账单',
+      confirmTitle: '退回重试未匹配账单',
+      confirmBody:
+        '这是写操作：会把所选时间范围内「上游待匹配」的账单退回待匹配队列并立刻重试一轮匹配，数据库里的账单状态会被修改。只会退回当前启用规则能解析出账号的账单，不会无差别退回全部；单次最多退回 1000 条，孤儿较多时需要连续点几次才能全部推进。退回的账单会重新获得一段孤儿宽限期，所以请在一段时间内连续点几次；间隔太久（超过宽限期）先前那批会重新变回孤儿。确认继续？',
+      running: '正在退回并重试…',
+      success: '已退回 {requeued} 条，匹配上 {matched} 条',
+      moreHint: '如仍有剩余可再次点击',
+      failed: '退回重试失败'
+    },
+
     range: {
       today: '今天',
       h24: '24小时',
@@ -199,11 +210,11 @@ export default {
 
     rules: {
       title: '账号 × 当前分组规则',
-      subtitle: '每个账号一行（含未关联任何分组的账号）；同一分组可绑定多个上游渠道',
+      subtitle: '一个分组一行，组内渠道账号各占一条子行；同一分组可绑定多个上游渠道，每个账号的 A6 令牌名单独保存',
       empty: '主站当前没有可展示的渠道账号',
       loadFailed: '加载账号规则失败',
-      unconfiguredCount: '有调用待配置 {count} 个账号',
-      allConfigured: '当前调用账号均已配置',
+      unconfiguredGroupsCount: '有调用待配置 {count} 个分组',
+      allConfigured: '当前调用分组均已配置',
       columns: {
         group: '当前分组',
         account: '渠道账号',
@@ -231,7 +242,13 @@ export default {
       unconfigured: '待配置',
       versionTooltip: '规则版本 v{version}；修改只影响新采集调用，历史记录使用快照',
       noSnapshot: '尚无规则快照',
+      groupLabel: '{name} · #{id}',
+      unnamedGroup: '未命名分组',
       groupMeta: '分组 #{id} · {count} 个渠道',
+      groupAccountsInline: '本表列出 {count} 个账号',
+      groupTokenKeysHint: '组内已配置的令牌标识（去重，id: 形式为上游令牌 ID）',
+      groupConfiguredHint: '组内全部账号都已配置',
+      groupUnconfiguredHint: '组内还有账号未配置，请在下方账号子行里逐个填写',
       recentGroupMeta: '分组 #{id}',
       recentGroupDeleted: '分组 #{id}（已删除）',
       noGroup: '未关联当前分组',

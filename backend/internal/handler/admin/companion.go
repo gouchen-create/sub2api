@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -637,11 +638,38 @@ type companionAccountRuleDTO struct {
 	RecentGroupName string `json:"recent_group_name"`
 }
 
+// companionAccountRuleGroupDTO 是规则页「按分组」视角的一行。
+//
+// 字段名与前端 CompanionView.vue 的解析逐字对应（groups[].token_keys、
+// groups[].unconfigured_* 等）：少一个键前端不会报错，只会静默渲染成空状态，
+// 因此这些键由契约测试逐字锁死。
+type companionAccountRuleGroupDTO struct {
+	GroupID           int64  `json:"group_id"`
+	GroupName         string `json:"group_name"`
+	GroupPriority     int    `json:"group_priority"`
+	GroupChannelCount int64  `json:"group_channel_count"`
+	Configured        bool   `json:"configured"`
+	UsageCount        int64  `json:"usage_count"`
+	// TokenKeys 是该分组下所有账号已配置的令牌标识（展开成单个标识、去重、排序）。
+	TokenKeys []string `json:"token_keys"`
+	// Accounts 复用逐账号行的 DTO：同一个账号在 items 与 groups 里必须是同一种形状，
+	// 否则前端需要维护两套渲染逻辑。
+	Accounts []companionAccountRuleDTO `json:"accounts"`
+}
+
 type companionAccountRuleListDTO struct {
 	Items                []companionAccountRuleDTO `json:"items"`
 	UnconfiguredAccounts int64                     `json:"unconfigured_accounts"`
-	From                 string                    `json:"from"`
-	To                   string                    `json:"to"`
+	// UnconfiguredGroups 是「组内有账号在范围内有调用、但还没配好规则」的分组数。
+	//
+	// 与 unconfigured_accounts 同口径，只是把统计单位换成分组：账号数会随分组内账号数膨胀，
+	// 分组数才是管理员要逐个清掉的业务待办条数（前端文案「有调用待配置 N 个分组」）。
+	UnconfiguredGroups int64 `json:"unconfigured_groups"`
+	// Groups 是 items 按分组聚合后的视角。刻意与 items 一起返回而不是替换它：
+	// 前端旧版本只认 items，新版本用 groups 渲染分组卡片，一次响应两边都能用。
+	Groups []companionAccountRuleGroupDTO `json:"groups"`
+	From   string                         `json:"from"`
+	To     string                         `json:"to"`
 }
 
 func toCompanionAccountRuleDTO(view *service.ReconciliationAccountRuleView) companionAccountRuleDTO {
@@ -684,10 +712,39 @@ func toCompanionAccountRuleDTO(view *service.ReconciliationAccountRuleView) comp
 	return dto
 }
 
+// toCompanionAccountRuleGroupDTO 把分组视角的一行转成接口 DTO。
+//
+// 三个切片一律初始化为空切片而不是留 nil：JSON 里 null 与 [] 对前端是两种语义
+// （null 会被 ?? 兜底成「加载中」那种空，[] 才是「确实没有」），
+// 而规则页的空状态必须确定无疑地是后者。
+func toCompanionAccountRuleGroupDTO(view *service.ReconciliationAccountRuleGroupView) companionAccountRuleGroupDTO {
+	tokenKeys := make([]string, 0, len(view.TokenKeys))
+	tokenKeys = append(tokenKeys, view.TokenKeys...)
+
+	accounts := make([]companionAccountRuleDTO, 0, len(view.Accounts))
+	for i := range view.Accounts {
+		accounts = append(accounts, toCompanionAccountRuleDTO(&view.Accounts[i]))
+	}
+
+	return companionAccountRuleGroupDTO{
+		GroupID:           view.GroupID,
+		GroupName:         view.GroupName,
+		GroupPriority:     view.GroupPriority,
+		GroupChannelCount: view.GroupChannelCount,
+		Configured:        view.Configured,
+		UsageCount:        view.UsageCount,
+		TokenKeys:         tokenKeys,
+		Accounts:          accounts,
+	}
+}
+
 // AccountRules 返回账号规则视图。
 //
 // 列表包含全部账号（含范围内零调用的账号），因此永远不会是空页面，
 // 管理员可以为任何一个账号补规则。
+//
+// 同时返回两份视角：items（逐账号，旧契约不变）与 groups（按分组聚合，
+// 供「这个业务分组配齐了吗」这个问题）。账号不属于任何分组时落在 group_id == 0 的桶里。
 //
 // GET /admin/companion/account-rules
 func (h *CompanionHandler) AccountRules(c *gin.Context) {
@@ -708,9 +765,16 @@ func (h *CompanionHandler) AccountRules(c *gin.Context) {
 		items = append(items, toCompanionAccountRuleDTO(&list.Items[i]))
 	}
 
+	groups := make([]companionAccountRuleGroupDTO, 0, len(list.Groups))
+	for i := range list.Groups {
+		groups = append(groups, toCompanionAccountRuleGroupDTO(&list.Groups[i]))
+	}
+
 	response.Success(c, companionAccountRuleListDTO{
 		Items:                items,
 		UnconfiguredAccounts: list.UnconfiguredAccounts,
+		UnconfiguredGroups:   list.UnconfiguredGroups,
+		Groups:               groups,
 		From:                 companionRFC3339(list.From),
 		To:                   companionRFC3339(list.To),
 	})
@@ -815,6 +879,66 @@ func (h *CompanionHandler) Collect(c *gin.Context) {
 		return
 	}
 	response.Success(c, companionCollectResultDTO{Success: true})
+}
+
+// companionRequeueUnmatchedResultDTO 是「退回重试」动作的结果。
+//
+// 同时回报退回条数与随后一轮实际匹配上的条数：管理员点这个按钮的目的就是
+// 「让改对规则的账单复活」，只报退回条数看不出这次修改到底有没有生效。
+type companionRequeueUnmatchedResultDTO struct {
+	Success  bool   `json:"success"`
+	Requeued int64  `json:"requeued"`
+	Matched  int64  `json:"matched"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+}
+
+// RequeueUnmatched 把「匹配不上」的孤儿账单退回队列并立刻重试一轮。
+//
+// 为什么必须由管理员显式触发：孤儿账单不会自动重试（文档 17.7），
+// 而无差别地把几千条孤儿全部退回会让注定匹配不上的账单反复占用宽限期、刷满日志。
+// 因此这里只在管理员改完规则、明确要求重试时才执行，且只退规则能解析出账号的那些。
+//
+// 退回之后必须**立刻在同一个窗口里**匹配一轮：常驻采集轮的窗口只有回看窗口
+// （默认 24 小时）那么长，比它更早的孤儿即使退回 staging 也不会被任何一轮扫到，
+// 那会让它们在「上游待匹配」计数里凭空消失。窗口由前端传入，与规则页看到的一致。
+//
+// 匹配失败不回滚退回动作、也不让本接口失败：退回是已经落库的事实，
+// 而下一轮采集仍会继续处理这批账单；错误进日志而不是丢掉。
+//
+// POST /admin/companion/requeue-unmatched
+func (h *CompanionHandler) RequeueUnmatched(c *gin.Context) {
+	from, to, err := h.companionWindow(c)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+	// 忽略请求体：窗口只从查询参数取，与规则页/明细页共用同一套解析，不接受请求体覆盖。
+	_, _ = io.Copy(io.Discard, io.LimitReader(c.Request.Body, companionMaxRequestBytes))
+
+	requeued, err := h.syncSvc.RequeueUnmatched(c.Request.Context(), from, to)
+	if err != nil {
+		writeReconciliationError(c, err)
+		return
+	}
+
+	var matched int64
+	if requeued > 0 {
+		matchedNow, _, matchErr := h.syncSvc.MatchStaging(c.Request.Context(), from, to)
+		if matchErr != nil {
+			logger.LegacyPrintf("handler.admin.companion", "[Companion] requeue-unmatched: match round failed: %v", matchErr)
+		} else {
+			matched = matchedNow
+		}
+	}
+
+	response.Success(c, companionRequeueUnmatchedResultDTO{
+		Success:  true,
+		Requeued: requeued,
+		Matched:  matched,
+		From:     companionRFC3339(from),
+		To:       companionRFC3339(to),
+	})
 }
 
 type companionBackfillStatusDTO struct {

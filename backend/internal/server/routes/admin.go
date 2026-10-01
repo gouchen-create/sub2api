@@ -156,6 +156,9 @@ func registerCompanionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		companion.PUT("/account-rules/:account_id", h.Admin.Companion.UpsertAccountRule)
 		companion.DELETE("/account-rules/:account_id", h.Admin.Companion.DeleteAccountRule)
 		companion.POST("/collect", h.Admin.Companion.Collect)
+		// 把「匹配不上」的孤儿账单退回队列并立刻重试一轮：管理员改完规则后显式触发，
+		// 不做成常驻任务——无差别自动重试会让注定匹配不上的账单反复占用孤儿宽限期。
+		companion.POST("/requeue-unmatched", h.Admin.Companion.RequeueUnmatched)
 		companion.GET("/a6/backfill", h.Admin.Companion.A6BackfillStatus)
 		companion.POST("/a6/backfill", h.Admin.Companion.StartA6Backfill)
 		companion.POST("/upstream/import", h.Admin.Companion.ImportUpstream)

@@ -2030,6 +2030,27 @@ type ReconciliationConfig struct {
 	UsageIntervalSeconds int `mapstructure:"usage_interval_seconds"`
 	// A6SyncIntervalSeconds 上游账单同步的间隔。
 	A6SyncIntervalSeconds int `mapstructure:"a6_sync_interval_seconds"`
+	// RealtimeMatchEnabled 是否启用「实时匹配」：一旦发现有新的下游扣费记录，
+	// 就立刻拉一小段上游账单并匹配，而不是干等下一个整点周期。
+	//
+	// 打开它意味着打上游接口的频率从「固定每 A6SyncIntervalSeconds 一次」
+	// 变成「有流量就拉一次」，上游若有限流会被打疼，所以必须配合下面两个
+	// 参数一起理解：延迟负责让上游账单先落库，最小间隔负责给上游限流兜底。
+	RealtimeMatchEnabled bool `mapstructure:"realtime_match_enabled"`
+	// RealtimeMatchDelaySeconds 发现新扣费记录后延迟多久才去拉上游账单。
+	//
+	// 不能是 0：上游账单通常晚于本站调用落库，立即去拉多半什么也拉不到，
+	// 白白消耗一次上游配额。留几十秒让上游先结算完，一次拉取就能覆盖。
+	RealtimeMatchDelaySeconds int `mapstructure:"realtime_match_delay_seconds"`
+	// RealtimeMatchMinIntervalSeconds 两次实时匹配之间的最小间隔。
+	//
+	// 这是防止「上游被自家流量打爆」的闸门：流量再密，实时匹配也不会比这个
+	// 间隔更频繁。定时同步那条线保持不变，继续做兜底。
+	RealtimeMatchMinIntervalSeconds int `mapstructure:"realtime_match_min_interval_seconds"`
+	// RealtimeMatchWindowSeconds 实时匹配回看的窗口长度。
+	//
+	// 只回看很短的一段：触发它的是刚刚产生的调用，拉全天窗口没有任何意义。
+	RealtimeMatchWindowSeconds int `mapstructure:"realtime_match_window_seconds"`
 }
 
 func setDefaults() {
@@ -2047,6 +2068,10 @@ func setDefaults() {
 	viper.SetDefault("reconciliation.timeout_seconds", 90)
 	viper.SetDefault("reconciliation.usage_interval_seconds", 30)
 	viper.SetDefault("reconciliation.a6_sync_interval_seconds", 300)
+	viper.SetDefault("reconciliation.realtime_match_enabled", true)
+	viper.SetDefault("reconciliation.realtime_match_delay_seconds", 30)
+	viper.SetDefault("reconciliation.realtime_match_min_interval_seconds", 60)
+	viper.SetDefault("reconciliation.realtime_match_window_seconds", 900)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")

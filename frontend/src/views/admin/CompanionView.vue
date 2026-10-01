@@ -75,7 +75,46 @@
               <Icon name="sync" size="sm" class="mr-1.5" :class="collecting ? 'animate-spin' : ''" />
               {{ collecting ? t('admin.companion.actions.collecting') : t('admin.companion.actions.collect') }}
             </button>
+            <!-- 退回重试：孤儿账单不会自动重试，改完规则必须由管理员显式触发一次；
+                 与「立即同步」同区，因为它俩都是改数据、看完板的写操作 -->
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-testid="companion-requeue-button"
+              :disabled="requeueing || loading"
+              @click="onRequeueRequest"
+            >
+              <Icon name="refresh" size="sm" class="mr-1.5" :class="requeueing ? 'animate-spin' : ''" />
+              {{
+                requeueing
+                  ? t('admin.companion.requeue.running')
+                  : t('admin.companion.requeue.button')
+              }}
+            </button>
           </div>
+        </div>
+
+        <!-- 退回重试结果：退回条数与随后一轮实际匹配上的条数必须同时给出，
+             只看退回条数看不出「改对的规则到底有没有生效」 -->
+        <div
+          v-if="requeueResult"
+          class="mt-4 rounded-2xl bg-gray-50 px-3 py-2 dark:bg-dark-900"
+          data-testid="companion-requeue-result"
+        >
+          <p class="text-xs font-medium text-gray-700 dark:text-gray-200">
+            {{
+              t('admin.companion.requeue.success', {
+                requeued: requeueResult.requeued,
+                matched: requeueResult.matched
+              })
+            }}
+          </p>
+          <p
+            v-if="requeueResult.requeued > 0"
+            class="mt-1 text-xs text-amber-600 dark:text-amber-400"
+          >
+            {{ t('admin.companion.requeue.moreHint') }}
+          </p>
         </div>
 
         <!-- 时间范围：未配置上游时看板不可读，这里一并收起 -->
@@ -240,10 +279,10 @@
             :loading="loading"
           />
 
-          <!-- 账号规则 -->
+          <!-- 账号规则：按分组组织，一个分组一行，组内账号各占一条子行 -->
           <CompanionRulesTable
-            :items="rules?.items ?? []"
-            :unconfigured-count="rules?.unconfigured_accounts ?? 0"
+            :groups="rules?.groups ?? []"
+            :unconfigured-group-count="rules?.unconfigured_groups ?? 0"
             :loading="loading && !firstLoadDone"
             :saving-id="savingId"
             :removing-id="removingId"
@@ -289,6 +328,21 @@
         @confirm="onClearTokenConfirmed"
         @cancel="pendingClearToken = false"
       />
+
+      <!-- 退回重试确认：写操作，会改数据库里的账单状态；窗口沿用页面当前窗口 -->
+      <ConfirmDialog
+        :show="pendingRequeue"
+        :title="t('admin.companion.requeue.confirmTitle')"
+        :message="t('admin.companion.requeue.confirmBody')"
+        :confirm-text="t('admin.companion.requeue.button')"
+        :cancel-text="t('common.cancel')"
+        @confirm="onRequeueConfirmed"
+        @cancel="pendingRequeue = false"
+      >
+        <p v-if="rangeSummary" class="text-xs text-gray-400 dark:text-gray-500">
+          {{ rangeSummary }}
+        </p>
+      </ConfirmDialog>
     </div>
   </AppLayout>
 </template>
@@ -311,6 +365,7 @@ import {
   type CompanionErrorInfo,
   type CompanionRequestPage,
   type CompanionRequestStatus,
+  type CompanionRequeueUnmatchedResult,
   type CompanionSettings,
   type CompanionSettingsInput,
   type CompanionStatus,
@@ -344,6 +399,10 @@ const RANGE_LABEL_KEY: Record<RangeKind, string> = {
 
 const loading = ref(false)
 const collecting = ref(false)
+const requeueing = ref(false)
+const pendingRequeue = ref(false)
+/** 最近一次「退回重试」的结果：退回条数与匹配上的条数都要展示 */
+const requeueResult = ref<CompanionRequeueUnmatchedResult | null>(null)
 const savingId = ref<number | null>(null)
 const removingId = ref<number | null>(null)
 const pendingRemove = ref<number | null>(null)
@@ -644,6 +703,53 @@ async function onCollect() {
     }
   } finally {
     collecting.value = false
+  }
+}
+
+// ==================== 退回重试未匹配账单 ====================
+
+function onRequeueRequest() {
+  if (requeueing.value) return
+  pendingRequeue.value = true
+}
+
+/**
+ * 「退回重试未匹配账单」：管理员改完规则后，把当前窗口里的孤儿账单退回队列重试。
+ *
+ * 为什么必须显式点：孤儿账单不会自动重试，而工作区内几千条孤儿一次也退不完。
+ *
+ * 窗口必须与同页的 summary / requests / account-rules 完全一致（后端同一套解析），
+ * 所以这里复用 buildWindow()，不另造窗口；也不能先推进滚动窗口再取参数，否则
+ * 退的就不是管理员此刻看到的这一批。
+ */
+async function onRequeueConfirmed() {
+  pendingRequeue.value = false
+  if (requeueing.value) return
+
+  let timeWindow: CompanionTimeWindowParams
+  try {
+    timeWindow = buildWindow()
+  } catch {
+    appStore.showError(t('admin.companion.range.invalid'))
+    return
+  }
+
+  requeueing.value = true
+  requeueResult.value = null
+  try {
+    const result = await companionAPI.requeueUnmatched(timeWindow)
+    requeueResult.value = result
+    // 退回会同时改动「上游待匹配」「待对账」计数，刷新看板才看得出规则改动是否生效
+    await load({ silent: true })
+  } catch (err) {
+    const info = classifyCompanionError(err)
+    if (info.kind === 'not_configured') {
+      statusInfo.value = { enabled: false, healthy: false }
+    } else {
+      appStore.showError(info.message || t('admin.companion.requeue.failed'))
+    }
+  } finally {
+    requeueing.value = false
   }
 }
 
