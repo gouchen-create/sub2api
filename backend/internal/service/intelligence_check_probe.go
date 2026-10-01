@@ -70,7 +70,8 @@ func (w *limitedResponseRecorder) Write(p []byte) (int, error) {
 //   - 题面、输出上限与思考强度由参数注入（官方路径仍固定用 "hi" 与 1024）；
 //   - 题面同时作为 prompt 参数下传，使 Chat Completions 分支直接生效。
 //
-// 平台分流、凭据、代理、错误处理与流解析全部复用官方实现。
+// 平台分流、凭据、代理、错误处理与响应解析全部复用官方实现；
+// 唯一的差异是流式与否由调用方决定，见下方覆盖值。
 func (s *AccountTestService) RunIntelligenceCheckProbe(
 	ctx context.Context,
 	accountID int64,
@@ -78,6 +79,7 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 	prompt string,
 	maxTokens int,
 	reasoningEffort string,
+	disableStream bool,
 ) (*IntelligenceCheckProbeResult, error) {
 	startedAt := time.Now()
 
@@ -88,6 +90,9 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 		Prompt:          prompt,
 		MaxTokens:       maxTokens,
 		ReasoningEffort: reasoningEffort,
+		// 默认流式（disableStream=false）。非流式虽然能一次拿到完整响应，
+		// 但上游网关按「整体响应」计时，长思考时更容易撞上网关超时。
+		DisableStream: disableStream,
 	})
 
 	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, prompt, AccountTestModeDefault)

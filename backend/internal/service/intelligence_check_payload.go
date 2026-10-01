@@ -17,13 +17,17 @@ import (
 // 没有挂覆盖值时，包装函数与官方原函数完全等价。
 const intelligenceCheckOverrideContextKey = "sub2api_intelligence_check_override"
 
-// intelligenceCheckOverride 承载一次智力检测跑测的题面、输出上限与思考强度覆盖值。
+// intelligenceCheckOverride 承载一次智力检测跑测的题面、输出上限、思考强度与流式开关。
 type intelligenceCheckOverride struct {
 	Prompt    string
 	MaxTokens int
 	// ReasoningEffort 是思考强度（low / medium / high / xhigh / max 等，走上游自己的取值）。
 	// 留空表示不干预，payload 保持官方原样——绝不能凭空塞一个上游不认的字段。
 	ReasoningEffort string
+	// DisableStream 为 true 时把请求体改成非流式（stream=false）。
+	// 智力检测需要一次性拿到完整作品，不依赖增量推送；
+	// 官方连通性测试保持流式（该字段保持 false），行为逐字不变。
+	DisableStream bool
 }
 
 // withIntelligenceCheckOverride 把覆盖值挂到本次请求上，仅智力检测跑测会调用。
@@ -35,8 +39,9 @@ func withIntelligenceCheckOverride(c *gin.Context, override intelligenceCheckOve
 		Prompt:          strings.TrimSpace(override.Prompt),
 		MaxTokens:       override.MaxTokens,
 		ReasoningEffort: strings.TrimSpace(override.ReasoningEffort),
+		DisableStream:   override.DisableStream,
 	}
-	if clean.Prompt == "" && clean.MaxTokens <= 0 && clean.ReasoningEffort == "" {
+	if clean.Prompt == "" && clean.MaxTokens <= 0 && clean.ReasoningEffort == "" && !clean.DisableStream {
 		return
 	}
 	c.Set(intelligenceCheckOverrideContextKey, clean)
@@ -55,7 +60,7 @@ func intelligenceCheckOverrideFrom(c *gin.Context) (intelligenceCheckOverride, b
 	if !ok {
 		return intelligenceCheckOverride{}, false
 	}
-	if override.Prompt == "" && override.MaxTokens <= 0 && override.ReasoningEffort == "" {
+	if override.Prompt == "" && override.MaxTokens <= 0 && override.ReasoningEffort == "" && !override.DisableStream {
 		return intelligenceCheckOverride{}, false
 	}
 	return override, true
@@ -78,12 +83,14 @@ func createClaudeTestPayloadForIntelligenceCheck(c *gin.Context, modelID string)
 // createOpenAIResponsesPayloadForIntelligenceCheck 包装官方 OpenAI Responses 测试 payload。
 // 输出上限字段名按 Responses API 规范使用 max_output_tokens，仅在显式配置时才写入，
 // 避免给官方请求体引入上游可能不接受的字段。
+// 智力检测同时把 stream 关掉（非流式），官方测试路径仍保持流式。
 func createOpenAIResponsesPayloadForIntelligenceCheck(c *gin.Context, modelID string, isOAuth bool) map[string]any {
 	payload := createOpenAITestPayload(modelID, isOAuth)
 	if override, ok := intelligenceCheckOverrideFrom(c); ok {
 		applyNestedTextOverride(payload, "input", override)
 		applyMaxTokensOverride(payload, "max_output_tokens", override.MaxTokens)
 		applyOpenAIResponsesReasoningOverride(payload, override)
+		applyStreamOverride(payload, override)
 	}
 	return payload
 }
@@ -134,6 +141,15 @@ func applyStringOverride(payload map[string]any, field string, value string) {
 		return
 	}
 	payload[field] = trimmed
+}
+
+// applyStreamOverride 把请求体切成非流式。
+// DisableStream 为 false 时完全不动 payload —— 官方测试路径必须保持 stream:true。
+func applyStreamOverride(payload map[string]any, override intelligenceCheckOverride) {
+	if payload == nil || !override.DisableStream {
+		return
+	}
+	payload["stream"] = false
 }
 
 // applyOpenAIResponsesReasoningOverride 按 Responses API 规范写入思考强度。

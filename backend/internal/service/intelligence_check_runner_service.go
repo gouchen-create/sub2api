@@ -337,6 +337,9 @@ func (s *IntelligenceCheckRunnerService) runDueAccount(ctx context.Context, item
 		Timeout:         settings.Timeout(),
 		TriggerSource:   IntelligenceCheckTriggerSchedule,
 		Attempt:         intelligenceCheckNextAttempt(item.last),
+		// 与全局流式开关保持一致；resolveRequestDefaults 也会兜一次，
+		// 这里显式带上是为了让调度器路径的意图自解释。
+		DisableStream: !settings.StreamEnabled,
 	}
 
 	run, err := s.checkSvc.StartRun(ctx, req)

@@ -40,6 +40,10 @@ type IntelligenceCheckRequest struct {
 	TriggerSource    string
 	BatchID          string
 	Attempt          int
+	// DisableStream 为 true 时以非流式发起跑测。
+	// 零值 false 即流式——这正是期望的默认，所以不需要额外的「是否已指定」标记。
+	// 由全局设置 intelligence_check_stream_enabled 统一决定，见 resolveRequestDefaults。
+	DisableStream bool
 }
 
 func (req IntelligenceCheckRequest) withDefaults() IntelligenceCheckRequest {
@@ -112,13 +116,19 @@ func (s *IntelligenceCheckService) resolveRequestDefaults(ctx context.Context, r
 	needEffort := strings.TrimSpace(req.ReasoningEffort) == ""
 	needTokens := req.MaxTokens <= 0
 	needTimeout := req.Timeout <= 0
-	if !needModel && !needEffort && !needTokens && !needTimeout {
-		return req
-	}
 
 	settings, err := s.settingSvc.GetIntelligenceCheckGlobalSettings(ctx)
 	if err != nil {
 		// 读设置失败不该让跑测直接崩：保持原样，由 ExecuteRun 如实记成「未配置模型」。
+		return req
+	}
+
+	// 流式开关没有「字段缺失」语义：bool 零值无法区分「没给」和「显式要流式」，
+	// 而这里的期望默认恰好就是流式，所以无条件以全局设置为准。
+	// 注意它必须在任何早返回之前执行，否则字段齐全的调用会绕过这个开关。
+	req.DisableStream = !settings.StreamEnabled
+
+	if !needModel && !needEffort && !needTokens && !needTimeout {
 		return req
 	}
 
@@ -227,7 +237,7 @@ func (s *IntelligenceCheckService) ExecuteRun(ctx context.Context, runID int64, 
 	} else {
 		execCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 		probe, err = s.accountTest.RunIntelligenceCheckProbe(
-			execCtx, req.AccountID, req.ModelID, req.Prompt, req.MaxTokens, req.ReasoningEffort,
+			execCtx, req.AccountID, req.ModelID, req.Prompt, req.MaxTokens, req.ReasoningEffort, req.DisableStream,
 		)
 		timedOut = errors.Is(execCtx.Err(), context.DeadlineExceeded)
 		cancel()

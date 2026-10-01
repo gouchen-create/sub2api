@@ -3,7 +3,11 @@
 package service
 
 import (
+	"bufio"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -201,4 +205,158 @@ func TestNormalizeIntelligenceCheckExtra_ReasoningEffort(t *testing.T) {
 		})
 		require.Error(t, err)
 	})
+}
+
+// 智力检测必须走非流式：请求体 stream 被关掉，官方路径保持流式。
+func TestIntelligenceCheckPayload_DisableStream(t *testing.T) {
+	t.Run("开启时把 stream 关掉", func(t *testing.T) {
+		c := newIntelligenceCheckTestContext()
+		withIntelligenceCheckOverride(c, intelligenceCheckOverride{
+			Prompt:        "draw a pelican",
+			MaxTokens:     32000,
+			DisableStream: true,
+		})
+
+		payload := createOpenAIResponsesPayloadForIntelligenceCheck(c, "gpt-6-astra", false)
+		require.Equal(t, false, payload["stream"])
+	})
+
+	t.Run("关闭时保持官方流式", func(t *testing.T) {
+		c := newIntelligenceCheckTestContext()
+		withIntelligenceCheckOverride(c, intelligenceCheckOverride{
+			Prompt:    "draw a pelican",
+			MaxTokens: 32000,
+		})
+
+		payload := createOpenAIResponsesPayloadForIntelligenceCheck(c, "gpt-6-astra", false)
+		require.Equal(t, true, payload["stream"])
+	})
+
+	t.Run("只有 DisableStream 的覆盖也不能被丢弃", func(t *testing.T) {
+		c := newIntelligenceCheckTestContext()
+		withIntelligenceCheckOverride(c, intelligenceCheckOverride{DisableStream: true})
+
+		payload := createOpenAIResponsesPayloadForIntelligenceCheck(c, "gpt-6-astra", false)
+		require.Equal(t, false, payload["stream"])
+	})
+}
+
+// 判形态：SSE 走原路，整体 JSON 走新路；不确定时默认落流式以保证官方行为不变。
+func TestIsNonStreamOpenAIResponse(t *testing.T) {
+	build := func(contentType, body string) (*http.Response, *bufio.Reader) {
+		resp := &http.Response{Header: http.Header{}}
+		if contentType != "" {
+			resp.Header.Set("Content-Type", contentType)
+		}
+		return resp, bufio.NewReader(strings.NewReader(body))
+	}
+
+	t.Run("Content-Type 是 SSE 时判流式", func(t *testing.T) {
+		resp, reader := build("text/event-stream", `{"id":"resp_1"}`)
+		require.False(t, isNonStreamOpenAIResponse(resp, reader))
+	})
+
+	t.Run("整体 JSON 判非流式", func(t *testing.T) {
+		resp, reader := build("application/json", `{"id":"resp_1","status":"completed"}`)
+		require.True(t, isNonStreamOpenAIResponse(resp, reader))
+	})
+
+	t.Run("无 Content-Type 时按首字节判断", func(t *testing.T) {
+		resp, reader := build("", "data: {\"type\":\"response.completed\"}\n\n")
+		require.False(t, isNonStreamOpenAIResponse(resp, reader))
+	})
+
+	t.Run("前导空白不影响判断", func(t *testing.T) {
+		resp, reader := build("", "\n  {\"id\":\"resp_1\"}")
+		require.True(t, isNonStreamOpenAIResponse(resp, reader))
+	})
+
+	t.Run("空响应默认落流式", func(t *testing.T) {
+		resp, reader := build("", "")
+		require.False(t, isNonStreamOpenAIResponse(resp, reader))
+	})
+}
+
+// 非流式正文提取：只认 message 里的 output_text，思考内容不得污染作品。
+func TestCollectOpenAIResponsesOutputText(t *testing.T) {
+	t.Run("提取 message 正文并忽略 reasoning", func(t *testing.T) {
+		var data map[string]any
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"status":"completed",
+			"output":[
+				{"type":"reasoning","summary":[]},
+				{"type":"message","role":"assistant","content":[
+					{"type":"output_text","text":"<svg>"},
+					{"type":"output_text","text":"</svg>"}
+				]}
+			]
+		}`), &data))
+		require.Equal(t, "<svg></svg>", collectOpenAIResponsesOutputText(data))
+	})
+
+	t.Run("没有 output 时返回空串", func(t *testing.T) {
+		require.Equal(t, "", collectOpenAIResponsesOutputText(map[string]any{}))
+	})
+}
+
+// 非流式解析端到端：产出的事件形态必须与流式路径一致，
+// 这样上层 parseIntelligenceCheckSSEOutput 无需区分两种形态。
+func TestProcessOpenAINonStream_EmitsSameEventShape(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	body := `{"id":"resp_1","status":"completed","model":"gpt-6-astra","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<svg>pelican</svg>"}]}]}`
+	require.NoError(t, (&AccountTestService{}).processOpenAINonStream(c, strings.NewReader(body)))
+
+	text, errMsg, _ := parseIntelligenceCheckSSEOutput(recorder.Body.String())
+	require.Equal(t, "<svg>pelican</svg>", text)
+	require.Equal(t, "", errMsg)
+}
+
+// 非流式下的上游错误必须被报出来，而不是当成一次成功的空作品。
+// sendErrorAndEnd 自身会把错误作为返回值上抛，同时写入 error 事件。
+func TestProcessOpenAINonStream_SurfacesError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	body := `{"error":{"message":"upstream overloaded","type":"server_error"}}`
+	require.Error(t, (&AccountTestService{}).processOpenAINonStream(c, strings.NewReader(body)))
+
+	_, errMsg, _ := parseIntelligenceCheckSSEOutput(recorder.Body.String())
+	require.Equal(t, "upstream overloaded", errMsg)
+}
+
+// 流式开关默认必须是「开」：默认值一旦漂移成非流式，长思考跑测会撞上游网关超时。
+func TestIntelligenceCheckStreamSetting_DefaultsToStreaming(t *testing.T) {
+	t.Run("全默认配置走流式", func(t *testing.T) {
+		require.True(t, DefaultIntelligenceCheckGlobalSettings().StreamEnabled)
+	})
+
+	t.Run("键缺失时按默认值兜底为开启", func(t *testing.T) {
+		// 老库升级后 settings 表里还没有这个键，读出来是空串。
+		// 若按 isTrueSettingValue 的语义处理会得到 false，把行为静默改成非流式。
+		require.True(t, isTrueSettingValueOrDefault("", true))
+	})
+
+	t.Run("显式关闭能被识别", func(t *testing.T) {
+		require.False(t, isTrueSettingValueOrDefault("false", true))
+	})
+
+	t.Run("显式开启能被识别", func(t *testing.T) {
+		require.True(t, isTrueSettingValueOrDefault("true", false))
+	})
+}
+
+// DisableStream 是「零值即流式」的字段，这个不变式是整条开关链路的地基。
+func TestIntelligenceCheckRequest_ZeroValueMeansStreaming(t *testing.T) {
+	var req IntelligenceCheckRequest
+	require.False(t, req.DisableStream)
+
+	c := newIntelligenceCheckTestContext()
+	withIntelligenceCheckOverride(c, intelligenceCheckOverride{
+		Prompt:    "draw a pelican",
+		MaxTokens: 32000,
+	})
+	payload := createOpenAIResponsesPayloadForIntelligenceCheck(c, "gpt-6-astra", false)
+	require.Equal(t, true, payload["stream"], "未开启 DisableStream 时必须保持官方流式请求体")
 }
