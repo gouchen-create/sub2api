@@ -164,6 +164,36 @@ func (f *reconFixture) extraRepo() service.ReconciliationUsageExtraRepository {
 	return NewReconciliationUsageExtraRepository(f.client)
 }
 
+// usageSource 是真实 SQL 的待采集读取仓库：这组用例必须打真库，
+// 因为要验证的正是 SQL 谓词（尤其是同一 created_at 上的主键水位）。
+func (f *reconFixture) usageSource() service.ReconciliationUsageSource {
+	return NewReconciliationUsageSourceRepository(f.client, f.db)
+}
+
+// collectedIDs 返回 usage_logs 里已经写进快照表的调用主键（限本窗口）。
+//
+// 直接查库而不是读内存状态：这样才能证明数据真的落到了 reconciliation_usage_extras。
+func (f *reconFixture) collectedIDs() map[int64]struct{} {
+	f.t.Helper()
+
+	rows, err := f.db.QueryContext(f.ctx, `
+SELECT u.id
+FROM usage_logs u
+JOIN reconciliation_usage_extras e ON e.usage_log_id = u.id
+WHERE u.created_at >= $1 AND u.created_at < $2`, f.from, f.to)
+	require.NoError(f.t, err, "query collected usage ids")
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		require.NoError(f.t, rows.Scan(&id))
+		out[id] = struct{}{}
+	}
+	require.NoError(f.t, rows.Err())
+	return out
+}
+
 // ==================== 事实写入 ====================
 
 type reconUsageSpec struct {
@@ -1072,15 +1102,13 @@ func TestReconciliationLedgerRepo_PointsAndUsageCountsByAccount(t *testing.T) {
 	require.Len(t, fallback, 1)
 	require.True(t, fallback[0].Start.Equal(f.from))
 
-	// UsageCountsByAccount：窗口内各账号的调用数、首末调用时间与模型名。
+	// UsageCountsByAccount：窗口内各账号的调用数与首末调用时间（模型名不在这里）。
 	usage, err := f.ledgerRepo().UsageCountsByAccount(f.ctx, f.from, f.to)
 	require.NoError(t, err)
 	require.Len(t, usage, 2)
 
 	require.EqualValues(t, 2, usage[accountA].Count)
 	require.EqualValues(t, 1, usage[accountB].Count)
-	require.ElementsMatch(t, []string{"m-points-1", "m-points-2"}, usage[accountA].Models)
-	require.ElementsMatch(t, []string{"m-points-3"}, usage[accountB].Models)
 	require.True(t, usage[accountA].FirstSeen.Equal(f.at(10)))
 	require.True(t, usage[accountA].LastSeen.Equal(f.at(20)))
 	require.EqualValues(t, accountA, usage[accountA].AccountID)
@@ -1088,6 +1116,27 @@ func TestReconciliationLedgerRepo_PointsAndUsageCountsByAccount(t *testing.T) {
 	outside, err := f.ledgerRepo().UsageCountsByAccount(f.ctx, f.to, f.to.Add(time.Hour))
 	require.NoError(t, err)
 	require.Empty(t, outside)
+
+	// RecentUsageByAccount：全历史最后一次调用的模型与分组，**不受窗口影响**。
+	// 账号 A 的最后一次是窗口内较晚的那条；账号 B 只有一条。
+	// 注意这里刻意先用一个「完全不含任何调用」的窗口去问 UsageCountsByAccount，
+	// 它必须为空——两种口径同时存在，不能互相污染。
+	outside2, err := f.ledgerRepo().UsageCountsByAccount(f.ctx, f.to, f.to.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, outside2)
+
+	recent, err := f.ledgerRepo().RecentUsageByAccount(f.ctx)
+	require.NoError(t, err)
+	require.Equal(t, "m-points-2", recent[accountA].Model, "账号 A 的最近一次是窗口内较晚的那条")
+	require.Equal(t, "m-points-3", recent[accountB].Model)
+	require.EqualValues(t, accountA, recent[accountA].AccountID)
+	// 分组跟着最后一次调用走：fixture 把全部调用都挂在同一个分组上。
+	require.EqualValues(t, f.groupID, recent[accountA].GroupID)
+	require.Equal(t, fmt.Sprintf("recon-group-%d", f.from.Unix()), recent[accountA].GroupName,
+		"最近分组必须解析成分组名，而不是只回一个 id")
+	// 窗口外的调用同样计入「最近一次」：这两个账号的最后一次调用都在窗口内，
+	// 但查询本身不接受时间参数——传不出窗口，也就无法被窗口抹掉。
+	require.NotZero(t, recent[accountB].GroupID)
 }
 
 func TestReconciliationLedgerRepo_RowsStatusFiltersAndPaging(t *testing.T) {
@@ -1194,4 +1243,326 @@ func TestReconciliationLedgerRepo_RowsStatusFiltersAndPaging(t *testing.T) {
 	clamped, _, err := repo.Rows(f.ctx, f.from, f.to, "", 1, 1000)
 	require.NoError(t, err)
 	require.Len(t, clamped, 3)
+}
+
+// ==================== 账号规则：分组渠道数 ====================
+
+// TestReconciliationAccountRuleRepo_CountAccountsByGroup 分组渠道数必须是真实统计。
+//
+// 守的是页面上的「分组 #N · M 个渠道」。两个容易错的方向都要卡住：
+//   - 漏算：账号可以同属多个分组，而规则页每行只显示优先级最高的那一个，
+//     按行数统计会把「展示位被别的分组抢走」的成员当成不存在；
+//   - 多算：软删账号不该再算渠道。
+//
+// 口径与主站分组页 account_count 一致（group_repo.loadAccountCounts 里的
+// COUNT(*) FILTER (WHERE a.deleted_at IS NULL)）。
+func TestReconciliationAccountRuleRepo_CountAccountsByGroup(t *testing.T) {
+	ctx := context.Background()
+	f := newReconFixture(t)
+
+	// 第二个分组：用来制造「一个账号同属两个分组」的场景。
+	other := mustCreateGroup(t, f.client, &service.Group{Name: f.uniq("recon-group-other")})
+
+	// A：只属于本分组。
+	accountA := f.newAccount("recon-count-a")
+	// B：同属 other(priority 1) 与本分组(priority 3)——展示位会被 other 抢走，
+	//    但它仍然是本分组的一个真实渠道。
+	accountB := f.newAccount("recon-count-b")
+	// C：属于本分组但已软删——不能再算渠道。
+	accountC := f.newAccount("recon-count-c")
+
+	// account_groups 两个外键都是 ON DELETE CASCADE，fixture 清理账号/分组时会连带删掉绑定行。
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO account_groups (account_id, group_id, priority) VALUES ($1, $2, 1)`, []any{accountA, f.groupID}},
+		{`INSERT INTO account_groups (account_id, group_id, priority) VALUES ($1, $2, 1)`, []any{accountB, other.ID}},
+		{`INSERT INTO account_groups (account_id, group_id, priority) VALUES ($1, $2, 3)`, []any{accountB, f.groupID}},
+		{`INSERT INTO account_groups (account_id, group_id, priority) VALUES ($1, $2, 1)`, []any{accountC, f.groupID}},
+		{`UPDATE accounts SET deleted_at = NOW() WHERE id = $1`, []any{accountC}},
+	} {
+		_, err := f.db.ExecContext(ctx, stmt.query, stmt.args...)
+		require.NoError(t, err, stmt.query)
+	}
+
+	counts, err := NewReconciliationAccountRuleRepository(f.client).CountAccountsByGroup(ctx)
+	require.NoError(t, err)
+
+	require.EqualValues(t, 2, counts[f.groupID],
+		"软删账号不算渠道；展示位被别的分组抢走的成员也不能漏算")
+	require.EqualValues(t, 1, counts[other.ID])
+}
+
+// TestReconciliationUsageSource_TwoRoundsCoverAllRowsWithoutGap 打真库验证 P0 修复。
+//
+// 场景取自线上事故的真实形态：一批调用共享**同一个 created_at**（同一微秒内的批量写入），
+// 单轮上限装不下，必须跨轮次读完。修复前的实现把游标无条件写成 now，第二轮起
+// 窗口 [now-1min, now) 里再也看不到这些更早的行——剩下的行永久丢失，
+// 下游收入记 0，却还会被匹配到上游账单，直接算出负毛利。
+//
+// 这个用例断言三件事：
+//  1. 第一轮装不下时，游标只能推进到本批最后一行的 (created_at, id)；
+//  2. 用这个游标再查一次，必须拿到**剩余的行**，两轮合起来一行不漏、一行不重；
+//  3. 用旧的「无条件推进到 now」游标去查，返回 0 行——这就是丢数据的现场证据。
+func TestReconciliationUsageSource_TwoRoundsCoverAllRowsWithoutGap(t *testing.T) {
+	f := newReconFixture(t)
+	account := f.newAccount("recon-usage-cursor")
+	source := f.usageSource()
+
+	// 7 行共享同一毫秒：同一批批量写入的真实形态。
+	sameInstant := f.at(20).Truncate(time.Millisecond)
+	ids := make([]int64, 0, 7)
+	for i := 0; i < 7; i++ {
+		ids = append(ids, f.insertUsage(reconUsageSpec{
+			accountID:  account,
+			model:      "m-cursor",
+			requestID:  fmt.Sprintf("req-cursor-%d", i),
+			actualCost: 0.5,
+			at:         sameInstant,
+		}))
+	}
+	require.Len(t, ids, 7)
+
+	const batchSize = 5
+	coldStart := f.at(0)
+
+	// ---- 第一轮：装不下 ----
+	first, err := source.ListUsageBetween(f.ctx, service.ReconciliationUsageQuery{
+		From: coldStart, To: f.to, Limit: batchSize,
+	})
+	require.NoError(t, err)
+	require.Len(t, first, batchSize, "第一轮被上限截断")
+
+	// 单调性：按 (created_at, id) 升序返回，游标推进才有意义。
+	for i := 1; i < len(first); i++ {
+		require.False(t,
+			first[i].CreatedAt.Before(first[i-1].CreatedAt) ||
+				(first[i].CreatedAt.Equal(first[i-1].CreatedAt) && first[i].UsageLogID <= first[i-1].UsageLogID),
+			"返回顺序必须是 (created_at, id) 严格升序")
+	}
+
+	last := first[len(first)-1]
+	cursorAt, cursorID := last.CreatedAt, last.UsageLogID
+	require.Equal(t, sameInstant, cursorAt)
+
+	// 第一轮的 5 行写进快照表（幂等写）。
+	require.EqualValues(t, 5, upsertFacts(t, f, first))
+
+	// ---- 第二轮：用第一轮的复合游标继续 ----
+	second, err := source.ListUsageBetween(f.ctx, service.ReconciliationUsageQuery{
+		From: coldStart, To: f.to, BoundaryAt: cursorAt, BoundaryID: cursorID, Limit: batchSize,
+	})
+	require.NoError(t, err)
+	require.Len(t, second, 2, "第二轮必须拿到同一时间戳上剩下的 2 行——这正是旧实现丢掉的行")
+	require.LessOrEqual(t, second[0].UsageLogID, ids[6])
+	require.Greater(t, second[0].UsageLogID, cursorID, "第二轮的行必须严格在游标之后")
+
+	require.EqualValues(t, 2, upsertFacts(t, f, second))
+
+	// ---- 两轮合计：一行不漏、一行不重 ----
+	collected := f.collectedIDs()
+	require.Len(t, collected, 7, "7 行必须全部落进快照表")
+	for _, id := range ids {
+		require.Contains(t, collected, id)
+	}
+
+	// 第三轮：已经采完，返回空，游标可以安全推进到 now-重叠量。
+	third, err := source.ListUsageBetween(f.ctx, service.ReconciliationUsageQuery{
+		From: coldStart, To: f.to, BoundaryAt: second[len(second)-1].CreatedAt,
+		BoundaryID: second[len(second)-1].UsageLogID, Limit: batchSize,
+	})
+	require.NoError(t, err)
+	require.Empty(t, third, "采完之后不得再返回任何行（否则会无限重复采集）")
+
+	// ---- 丢数据的现场证据：旧实现的游标语义 ----
+	// 旧代码第一轮之后把游标写成 now；第二轮窗口是 [now-1min, now)。
+	// 这些行发生在几十分钟前（隔离窗口远离 now），于是这一查返回 0 行，
+	// 剩下 2 行永远不会被采集。
+	now := time.Now().UTC()
+	legacy, err := source.ListUsageBetween(f.ctx, service.ReconciliationUsageQuery{
+		From: now.Add(-time.Minute), To: now, Limit: batchSize,
+	})
+	require.NoError(t, err)
+	require.Emptyf(t, legacy,
+		"旧实现（游标无条件跳到 now）在这里会漏掉 %d 行；本断言把这个丢数据现场钉死", len(ids)-batchSize)
+
+	// 待采集计数同样要按复合游标工作：此刻应为 0。
+	pending, err := source.CountUsagePending(f.ctx, service.ReconciliationUsageQuery{
+		From: coldStart, To: f.to, BoundaryAt: second[len(second)-1].CreatedAt,
+		BoundaryID: second[len(second)-1].UsageLogID,
+	}, 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, pending)
+
+	// 回退到冷启动游标（模拟运维按手册回滚游标）：全部 7 行重新可见，
+	// 唯一索引保证重扫不会写出重复行。
+	replay, err := source.ListUsageBetween(f.ctx, service.ReconciliationUsageQuery{
+		From: coldStart, To: f.to, Limit: batchSize,
+	})
+	require.NoError(t, err)
+	require.Len(t, replay, batchSize, "回滚游标后必须能重新看到这些行（补救路径可用）")
+	require.EqualValues(t, 0, upsertFacts(t, f, replay), "重扫同一批必须 0 新增：写快照是幂等的")
+	require.Len(t, f.collectedIDs(), 7)
+}
+
+// TestReconciliationMatchStaging_GraceAndOrphanRemediation 打真库验证 P1-2 的两条路径。
+//
+// 一、宽限期从**导入时刻**起算（文档 6.3）。隔离窗口里的账单 occurred_at 在 2001 年，
+//
+//	用旧口径（occurred_at）它早就过期，第一轮就会被打成孤儿；用新口径
+//	（imported_at = 插入时的 now()）它必须留在 staging。
+//
+// 二、误判成孤儿的账单要有补救路径。文档 17.7 明确孤儿不会自动重试，所以补救是
+//
+//	**显式运维动作**：把 match_state 从 'unmatched' 翻回 'staging'（带上
+//	occurred_at 与 token_name 的边界，不做全表大扫），下一轮匹配就必须能把它配上。
+//	这个用例就是那份运维 SQL 的可执行证据。
+func TestReconciliationMatchStaging_GraceAndOrphanRemediation(t *testing.T) {
+	f := newReconFixture(t)
+	account := f.newAccount("recon-orphan-retry")
+
+	// 令牌名 → 账号的解析靠规则表：没有规则就根本不会进入匹配流程。
+	tokenName := f.uniq("tok-orphan-retry")
+	f.setRule(account, "a6", tokenName, true)
+
+	// 一条匹配不上的账单：令牌能解析到账号，但没有任何下游调用与它对应。
+	billID := f.insertBill(reconBillSpec{
+		upstreamRequestID: f.uniq("up-orphan-retry"),
+		occurredAt:        f.at(30),
+		tokenName:         tokenName,
+		model:             "m-orphan",
+		outputTokens:      123,
+		costOriginal:      2,
+		fxRateToCNY:       1,
+		costCNY:           2,
+		matchState:        "staging",
+	})
+
+	svc := newReconSyncServiceForTest(f)
+
+	// ---- 第一轮：宽限期未过，不得判孤儿 ----
+	matched, orphaned, err := svc.MatchStaging(f.ctx, f.from, f.to)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, matched)
+	require.EqualValues(t, 0, orphaned,
+		"刚刚导入的账单不能因为上游流水发生在 2001 年就被判成孤儿（宽限期从导入时刻起算）")
+	require.Equal(t, "staging", f.billMatchState(billID))
+
+	// ---- 让宽限期过期：把入库时间往前挪（等价于「导入已经过去很久」）----
+	f.ageBillImportedAt(billID, 2*time.Hour)
+
+	_, orphaned, err = svc.MatchStaging(f.ctx, f.from, f.to)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, orphaned, "导入超过宽限期且匹配不上，才是真孤儿")
+	require.Equal(t, "unmatched", f.billMatchState(billID))
+
+	// 孤儿不会被下一轮自动重试（文档 17.7）。
+	_, orphaned, err = svc.MatchStaging(f.ctx, f.from, f.to)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, orphaned, "已判定的孤儿不在 staging 里，不会每轮重复处理")
+
+	// ---- 补救：显式把孤儿翻回 staging ----
+	//
+	// 这就是交付给运维的那条 SQL（带 occurred_at 边界，不做全表大扫）。
+	// 真实场景是「宽限期口径写错导致批量误判」或「账单导入过早」。
+	res, err := f.db.ExecContext(f.ctx, `
+UPDATE reconciliation_upstream_bills
+SET match_state = 'staging'
+WHERE id = $1 AND match_state = 'unmatched' AND occurred_at >= $2 AND occurred_at < $3`,
+		billID, f.from, f.to)
+	require.NoError(t, err, "孤儿回滚 SQL")
+	affected, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, affected)
+
+	// ---- 补上下游调用（模拟「快照补采到位」），下一轮必须配上 ----
+	upstreamRequestID := f.uniq("up-orphan-retry")
+	usageLogID := f.insertUsage(reconUsageSpec{
+		accountID: account, model: "m-orphan", requestID: "req-orphan-retry",
+		upstreamRequestID: upstreamRequestID, outputTokens: 123, actualCost: 1.2, at: f.at(30),
+	})
+	f.insertExtra(usageLogID, account, "a6", tokenName, 1.2)
+
+	matched, orphaned, err = svc.MatchStaging(f.ctx, f.from, f.to)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, matched, "翻回 staging 之后必须能重新匹配上")
+	require.EqualValues(t, 0, orphaned)
+	require.Equal(t, "matched", f.billMatchState(billID))
+
+	// 回滚 SQL 是幂等的：已经 matched 的账单不会被它影响。
+	res, err = f.db.ExecContext(f.ctx, `
+UPDATE reconciliation_upstream_bills
+SET match_state = 'staging'
+WHERE id = $1 AND match_state = 'unmatched' AND occurred_at >= $2 AND occurred_at < $3`,
+		billID, f.from, f.to)
+	require.NoError(t, err)
+	affected, err = res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 0, affected, "已匹配的账单不得被回滚 SQL 动到（WHERE match_state='unmatched'）")
+	require.Equal(t, "matched", f.billMatchState(billID))
+}
+
+// newReconSyncServiceForTest 用真仓库组装一个采集/匹配服务（不打上游，billSource 为 nil）。
+func newReconSyncServiceForTest(f *reconFixture) *service.ReconciliationSyncService {
+	return service.NewReconciliationSyncService(
+		NewReconciliationUsageExtraRepository(f.client),
+		NewReconciliationUpstreamBillRepository(f.client, f.db),
+		NewReconciliationAccountRuleRepository(f.client),
+		NewReconciliationSyncStateRepository(f.client),
+		NewReconciliationUsageSourceRepository(f.client, f.db),
+		nil,
+		service.ReconciliationSyncConfig{
+			FxUSDCNYRate:     1,
+			A6Lookback:       time.Hour,
+			CollectBatchSize: 5000,
+			StagingLimit:     100,
+			MatchGracePeriod: 30 * time.Minute,
+		},
+	)
+}
+
+// billMatchState 读一条账单的 match_state（只关心状态机的那一列）。
+func (f *reconFixture) billMatchState(billID int64) string {
+	f.t.Helper()
+
+	var state string
+	require.NoError(f.t, scanSingleRow(f.ctx, f.db,
+		`SELECT match_state FROM reconciliation_upstream_bills WHERE id = $1`,
+		[]any{billID}, &state))
+	return state
+}
+
+// ageBillImportedAt 把账单的入库时间往前挪 delta（模拟「导入已经过去很久」）。
+func (f *reconFixture) ageBillImportedAt(billID int64, delta time.Duration) {
+	f.t.Helper()
+
+	_, err := f.db.ExecContext(f.ctx,
+		`UPDATE reconciliation_upstream_bills SET imported_at = now() - $2::interval WHERE id = $1`,
+		billID, fmt.Sprintf("%d seconds", int(delta.Seconds())))
+	require.NoError(f.t, err, "age imported_at")
+}
+
+// upsertFacts 把一批采集结果写成快照，返回真正新增的行数。
+func upsertFacts(t *testing.T, f *reconFixture, facts []service.ReconciliationUsageFact) int64 {
+	t.Helper()
+
+	extras := make([]service.ReconciliationUsageExtra, 0, len(facts))
+	for _, fact := range facts {
+		extras = append(extras, service.ReconciliationUsageExtra{
+			UsageLogID:      fact.UsageLogID,
+			AccountID:       fact.AccountID,
+			RuleProvider:    "a6",
+			RuleExternalKey: "tok-cursor",
+			RuleVersion:     1,
+			RevenueOriginal: fact.ActualCost,
+			FxRateToCNY:     1,
+			RevenueCNY:      fact.ActualCost,
+			CollectedAt:     time.Now().UTC(),
+		})
+	}
+
+	inserted, err := f.extraRepo().UpsertBatch(f.ctx, extras)
+	require.NoError(t, err)
+	return inserted
 }

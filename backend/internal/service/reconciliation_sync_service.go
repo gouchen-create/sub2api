@@ -27,6 +27,10 @@ const (
 // 同步状态键。
 const (
 	ReconciliationStateKeyUsageCursor       = "usage_last_collected_at"
+	ReconciliationStateKeyUsageCursorID     = "usage_last_collected_id"
+	ReconciliationStateKeyUsageBatchSize    = "usage_last_batch_size"
+	ReconciliationStateKeyUsageTruncated    = "usage_last_batch_truncated"
+	ReconciliationStateKeyUsageBacklog      = "usage_pending_backlog"
 	ReconciliationStateKeyA6LastSyncUnix    = "a6_last_sync_unix"
 	ReconciliationStateKeyA6LastSyncError   = "a6_last_sync_error"
 	ReconciliationStateKeyA6LastSyncErrorAt = "a6_last_sync_error_at"
@@ -38,6 +42,12 @@ const (
 	ReconciliationStateKeyBackfillProcessed = "a6_backfill_processed"
 	ReconciliationStateKeyBackfillError     = "a6_backfill_error"
 )
+
+// reconciliationBacklogProbeLimit 是积压探针的计数上限。
+//
+// 积压数字只用于判断「采集器追不上了」，不需要精确值：数到十万行就够了，
+// 再往上数只是白烧 IO。返回值等于该上限时含义是「至少还有这么多」。
+const reconciliationBacklogProbeLimit = 100_000
 
 // 回填状态取值。前端契约文档写的是 running / done / failed（历史实现写成 completed，
 // 属于文档与实现漂移，这里以契约为准）。
@@ -142,89 +152,264 @@ func (s *ReconciliationSyncService) FxRate() float64 {
 // 冻结令牌是为了令牌改名后旧账单仍能匹配（旧实现只读当前映射，令牌一改名
 // 历史账单全部变成孤儿，实测影响 1157 条）；冻结汇率是为了历史金额不随后续
 // 汇率调整而漂移。
+//
+// ⚠️ 游标只允许推进到「本轮确实写进快照的位置」，绝不允许越过没采集到的行。
+// 旧实现无条件把游标写成 now，于是被单轮上限截掉的那部分行（created_at 落在
+// 下一轮起点 cursor-1min 之前）再也不会被任何一轮扫到：它们的下游收入永久记 0，
+// 却照样会被匹配到上游账单，直接算出负毛利。
 func (s *ReconciliationSyncService) CollectUsage(ctx context.Context) (int64, error) {
 	now := time.Now().UTC()
 
-	since, err := s.resolveUsageCursor(ctx, now)
+	cursor, err := s.resolveUsageCursor(ctx, now)
 	if err != nil {
 		return 0, err
 	}
 
-	facts, err := s.usageSource.ListUsageBetween(ctx, since, now, s.cfg.CollectBatchSize)
+	query := ReconciliationUsageQuery{
+		// 起点回退一分钟：重叠部分靠快照表的唯一索引（usage_log_id）幂等去重，
+		// 重复扫描没有副作用，但能兜住时钟抖动与迟到落库的调用。
+		From:       cursor.At.Add(-reconciliationCollectOverlap),
+		To:         now,
+		BoundaryAt: cursor.At,
+		BoundaryID: cursor.ID,
+		Limit:      s.cfg.CollectBatchSize,
+	}
+
+	facts, err := s.usageSource.ListUsageBetween(ctx, query)
 	if err != nil {
 		return 0, err
 	}
-	if len(facts) == 0 {
-		return 0, nil
-	}
 
-	rules, err := s.ruleIndexByAccount(ctx)
-	if err != nil {
-		return 0, err
-	}
+	// 取满上限 = 窗口内还有没读完的行。这个布尔值决定游标能不能跳到 now，
+	// 也决定要不要打告警。
+	truncated := len(facts) >= s.cfg.CollectBatchSize
 
-	effectiveRate := s.EffectiveFxRate(ctx)
-	fxRate := decimal.NewFromFloat(effectiveRate)
-	extras := make([]ReconciliationUsageExtra, 0, len(facts))
-	for _, fact := range facts {
-		rule, hasRule := rules[fact.AccountID]
-
-		extra := ReconciliationUsageExtra{
-			UsageLogID:      fact.UsageLogID,
-			AccountID:       fact.AccountID,
-			RevenueOriginal: fact.ActualCost,
-			FxRateToCNY:     effectiveRate,
-			RevenueCNY:      decimal.NewFromFloat(fact.ActualCost).Mul(fxRate).InexactFloat64(),
-			CollectedAt:     now,
+	if len(facts) > 0 {
+		rules, err := s.ruleIndexByAccount(ctx)
+		if err != nil {
+			return 0, err
 		}
-		if hasRule && rule.Enabled {
-			extra.RuleProvider = rule.Provider
-			extra.RuleExternalKey = rule.ExternalKey
-			extra.RuleVersion = rule.Version
+
+		effectiveRate := s.EffectiveFxRate(ctx)
+		fxRate := decimal.NewFromFloat(effectiveRate)
+		extras := make([]ReconciliationUsageExtra, 0, len(facts))
+		for _, fact := range facts {
+			rule, hasRule := rules[fact.AccountID]
+
+			extra := ReconciliationUsageExtra{
+				UsageLogID:      fact.UsageLogID,
+				AccountID:       fact.AccountID,
+				RevenueOriginal: fact.ActualCost,
+				FxRateToCNY:     effectiveRate,
+				RevenueCNY:      decimal.NewFromFloat(fact.ActualCost).Mul(fxRate).InexactFloat64(),
+				CollectedAt:     now,
+			}
+			if hasRule && rule.Enabled {
+				extra.RuleProvider = rule.Provider
+				extra.RuleExternalKey = rule.ExternalKey
+				extra.RuleVersion = rule.Version
+			}
+			extras = append(extras, extra)
 		}
-		extras = append(extras, extra)
+
+		inserted, err := s.extrasRepo.UpsertBatch(ctx, extras)
+		if err != nil {
+			// 游标只在写入成功后推进；失败时下一轮会重扫同一区间，
+			// 由快照表的唯一索引保证不会产生重复行。
+			return inserted, err
+		}
+		next, err := s.advanceUsageCursor(ctx, cursor, facts, now, truncated)
+		if err != nil {
+			return inserted, err
+		}
+		s.recordCollectProgress(ctx, next, len(facts), truncated, now)
+		return inserted, nil
 	}
 
-	inserted, err := s.extrasRepo.UpsertBatch(ctx, extras)
+	// 本轮没有待采集的行：窗口里确实一条都没有，所以可以安全地把游标推到
+	// now-重叠量（保留一分钟重扫带），让 usage_last_collected_at 继续按轮前移——
+	// 文档 15.1 就是靠它判断采集器活着的，原地不动会被误判成采集器挂了。
+	next, err := s.advanceUsageCursor(ctx, cursor, nil, now, false)
 	if err != nil {
-		return inserted, err
+		return 0, err
 	}
+	s.recordCollectProgress(ctx, next, 0, false, now)
+	return 0, nil
+}
 
-	// 游标只在写入成功后推进；失败时下一轮会重扫同一区间，
-	// 由快照表的唯一索引保证不会产生重复行。
-	if err := s.stateRepo.Set(ctx, ReconciliationStateKeyUsageCursor, now.Format(time.RFC3339Nano)); err != nil {
-		logger.LegacyPrintf("service.reconciliation_sync", "usage_cursor_advance_failed: err=%v", err)
-	}
-	return inserted, nil
+// reconciliationUsageCursor 是采集位置的复合游标：时间 + 同一时刻上的主键水位。
+type reconciliationUsageCursor struct {
+	// At 已采集到的时间位置。
+	At time.Time
+	// ID 是 created_at == At 上已被排除的最大主键；0 表示该时刻没有排除任何行。
+	ID int64
+	// Resolved 表示状态表里确实读到了一个可解析的游标；false 表示这是冷启动起点。
+	Resolved bool
 }
 
 // resolveUsageCursor 解析采集起点。
 //
-// 首次运行时回看 A6Lookback，之后从上次成功位置略微回退一点，
+// 首次运行（或游标不可解析）时回看 A6Lookback，之后从上次成功位置略微回退一点，
 // 覆盖时钟抖动与迟到落库的调用。
-func (s *ReconciliationSyncService) resolveUsageCursor(ctx context.Context, now time.Time) (time.Time, error) {
-	raw, err := s.stateRepo.Get(ctx, ReconciliationStateKeyUsageCursor)
+func (s *ReconciliationSyncService) resolveUsageCursor(ctx context.Context, now time.Time) (reconciliationUsageCursor, error) {
+	values, err := s.stateRepo.GetMultiple(ctx, []string{
+		ReconciliationStateKeyUsageCursor,
+		ReconciliationStateKeyUsageCursorID,
+	})
 	if err != nil {
-		return time.Time{}, err
+		return reconciliationUsageCursor{}, err
 	}
-	if strings.TrimSpace(raw) == "" {
-		lookback := s.cfg.A6Lookback
-		if lookback <= 0 {
-			lookback = 24 * time.Hour
-		}
-		return now.Add(-lookback), nil
+
+	raw := strings.TrimSpace(values[ReconciliationStateKeyUsageCursor])
+	if raw == "" {
+		return reconciliationUsageCursor{At: s.coldStartCursor(now)}, nil
 	}
 
 	parsed, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		logger.LegacyPrintf("service.reconciliation_sync", "usage_cursor_unparsable: raw=%q err=%v", raw, err)
-		lookback := s.cfg.A6Lookback
-		if lookback <= 0 {
-			lookback = 24 * time.Hour
-		}
-		return now.Add(-lookback), nil
+		return reconciliationUsageCursor{At: s.coldStartCursor(now)}, nil
 	}
-	return parsed.Add(-reconciliationCollectOverlap), nil
+
+	cursor := reconciliationUsageCursor{At: parsed, Resolved: true}
+	if idRaw := strings.TrimSpace(values[ReconciliationStateKeyUsageCursorID]); idRaw != "" {
+		id, parseErr := strconv.ParseInt(idRaw, 10, 64)
+		if parseErr != nil {
+			// 主键水位读坏了不致命：按 0 处理等于「该时刻一行都没排除」，
+			// 下一轮把该时刻的行整批重扫一遍，幂等写入不会产生重复行。
+			logger.LegacyPrintf("service.reconciliation_sync", "usage_cursor_id_unparsable: raw=%q err=%v", idRaw, parseErr)
+		} else if id > 0 {
+			cursor.ID = id
+		}
+	}
+	return cursor, nil
+}
+
+// coldStartCursor 是没有任何可用游标时的起点：当前时间往前回看一个窗口。
+func (s *ReconciliationSyncService) coldStartCursor(now time.Time) time.Time {
+	lookback := s.cfg.A6Lookback
+	if lookback <= 0 {
+		lookback = 24 * time.Hour
+	}
+	return now.Add(-lookback)
+}
+
+// advanceUsageCursor 计算并落库下一轮的采集位置，返回写入后的游标。
+//
+// 不变量（写完后必须成立）：
+//
+//	所有 created_at < At-重叠量 的调用都已经在 reconciliation_usage_extras 里。
+//
+// 三条推进规则，各自都是这条不变量的保守特例：
+//
+//  1. 本批被单轮上限截断（len == CollectBatchSize）：只能推进到本批**最后一行**的
+//     (created_at, id)。它之前（含同一时刻更小的主键）的行全部在本批里写过了，
+//     所以一个都不越过；剩下的行留给下一轮。
+//  2. 本批未截断且非空：窗口 [From, To) 内的行已经全部写完，可以推进到
+//     max(上一轮位置, now-重叠量)。这里刻意用 now-重叠量 而不是 now：
+//     正常路径下它比 now 更保守（多留一分钟重扫带），却仍然让游标按轮前移。
+//  3. 本批为空：窗口里一条都没有，同样推进到该位置。
+//
+// 同一 created_at 上有超过单轮上限的行时（例如批量导入把上万行写成同一个时间戳），
+// 规则 1 会先把主键水位推到本批最大 id，下一轮从水位之后继续取——位置在
+// (created_at, id) 上严格单调，因此必然前进，不会出现「连续两轮取到完全相同的批次」。
+func (s *ReconciliationSyncService) advanceUsageCursor(
+	ctx context.Context,
+	prev reconciliationUsageCursor,
+	facts []ReconciliationUsageFact,
+	now time.Time,
+	truncated bool,
+) (reconciliationUsageCursor, error) {
+	next := reconciliationUsageCursor{Resolved: true}
+
+	switch {
+	case truncated && len(facts) > 0:
+		last := facts[len(facts)-1]
+		next.At = last.CreatedAt
+		next.ID = last.UsageLogID
+	case len(facts) > 0:
+		next.At = maxTime(prev.At, now.Add(-reconciliationCollectOverlap))
+	default:
+		next.At = maxTime(prev.At, now.Add(-reconciliationCollectOverlap))
+	}
+
+	if err := s.stateRepo.Set(ctx, ReconciliationStateKeyUsageCursor, next.At.Format(time.RFC3339Nano)); err != nil {
+		return next, err
+	}
+	if err := s.stateRepo.Set(ctx, ReconciliationStateKeyUsageCursorID, strconv.FormatInt(next.ID, 10)); err != nil {
+		return next, err
+	}
+	return next, nil
+}
+
+// recordCollectProgress 把「本轮取了多少行、有没有被上限截断、还积压多少」写进状态表。
+//
+// 文档 15.1 只把「单轮上限被塞满」当成一句排查提示，实现里却既没有补偿路径也没有
+// 告警：积压只能靠人去猜。这几个键把猜测变成可查状态，被截断时另外打一条 WARN。
+//
+// cursor 传的是本轮写完之后的位置，积压探针直接复用它，避免自己另算一套口径
+// （两套口径迟早漂移，页面上的积压数字就会与采集器实际进度对不上）。
+func (s *ReconciliationSyncService) recordCollectProgress(ctx context.Context, cursor reconciliationUsageCursor, batchSize int, truncated bool, now time.Time) {
+	setStateValue(ctx, s.stateRepo, ReconciliationStateKeyUsageBatchSize, strconv.Itoa(batchSize))
+	setStateValue(ctx, s.stateRepo, ReconciliationStateKeyUsageTruncated, strconv.FormatBool(truncated))
+
+	if !truncated {
+		// 没被截断说明窗口已经读完，积压清零；否则会留下一个骗人的旧数字。
+		setStateValue(ctx, s.stateRepo, ReconciliationStateKeyUsageBacklog, "0")
+		return
+	}
+
+	// 只有确实存在积压时才去数：这是唯一值得付出一次计数代价的场景。
+	pending, err := s.usageSource.CountUsagePending(ctx, ReconciliationUsageQuery{
+		From:       cursor.At.Add(-reconciliationCollectOverlap),
+		To:         now,
+		BoundaryAt: cursor.At,
+		BoundaryID: cursor.ID,
+		Limit:      reconciliationBacklogProbeLimit,
+	}, reconciliationBacklogProbeLimit)
+	if err != nil {
+		logger.LegacyPrintf("service.reconciliation_sync", "usage_backlog_probe_failed: err=%v", err)
+		return
+	}
+	setStateValue(ctx, s.stateRepo, ReconciliationStateKeyUsageBacklog, strconv.FormatInt(pending, 10))
+
+	logger.LegacyPrintf("service.reconciliation_sync",
+		"warn: usage_collect_truncated: batch_limit=%d pending_at_least=%d collected_at=%s — 单轮上限被塞满，游标只推进到本批最后一行，剩余行会在后续轮次继续采集",
+		batchSize, pending, now.Format(time.RFC3339Nano))
+}
+
+// setStateValue 写一个状态键；写失败只记日志，不影响采集本身的结果。
+func setStateValue(ctx context.Context, repo ReconciliationSyncStateRepository, key, value string) {
+	if err := repo.Set(ctx, key, value); err != nil {
+		logger.LegacyPrintf("service.reconciliation_sync", "state_write_failed: key=%s err=%v", key, err)
+	}
+}
+
+// CollectBacklog 返回当前待采集的行数，供只读诊断使用。
+//
+// 它不推进任何状态，也不写库：运维要先看见积压，才能决定要不要回拨游标重采。
+// 返回值等于 reconciliationBacklogProbeLimit 时含义是「至少还有这么多」。
+func (s *ReconciliationSyncService) CollectBacklog(ctx context.Context) (int64, error) {
+	now := time.Now().UTC()
+	cursor, err := s.resolveUsageCursor(ctx, now)
+	if err != nil {
+		return 0, err
+	}
+	return s.usageSource.CountUsagePending(ctx, ReconciliationUsageQuery{
+		From:       cursor.At.Add(-reconciliationCollectOverlap),
+		To:         now,
+		BoundaryAt: cursor.At,
+		BoundaryID: cursor.ID,
+		Limit:      reconciliationBacklogProbeLimit,
+	}, reconciliationBacklogProbeLimit)
+}
+
+// maxTime 返回两个时间中较晚的一个。
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // ruleIndexByAccount 把全部规则按账号索引起来。
@@ -246,31 +431,44 @@ func (s *ReconciliationSyncService) SyncA6Bills(ctx context.Context, from, to ti
 		return 0, ErrReconciliationBillSourceUnavailable
 	}
 
-	bills, err := s.billSource.FetchBills(ctx, ReconciliationBillQuery{
+	bills, fetchErr := s.billSource.FetchBills(ctx, ReconciliationBillQuery{
 		From:     from,
 		To:       to,
 		PageSize: s.cfg.StagingLimit,
 	})
-	if err != nil {
-		s.recordSyncError(ctx, err)
-		return 0, err
-	}
 
-	// 导入时把换算数字抄到每条账单上，落库即冻结。
-	fxRate := s.EffectiveFxRate(ctx)
-	for i := range bills {
-		if bills[i].FxRateToCNY <= 0 {
-			bills[i].FxRateToCNY = fxRate
+	// 拉取报错但已经拿到部分账单时：先把拿到的导入，再把错误报出去。
+	//
+	// 典型场景是翻页撞上限（ErrReconciliationA6PageLimitReached）：上游真实返回了
+	// 好几页账单，旧实现却在导入之前就 return，把它们整批丢掉。下一轮又从第 1 页
+	// 重新拉、再次撞上限、再次丢掉——导入进度永远是 0，而库里、页面上只有一条错误，
+	// 看起来像「上游没数据」。
+	//
+	// 账单写入是幂等 upsert（provider + upstream_request_id 唯一，冲突 DO NOTHING），
+	// 部分导入不会留下半截状态，所以「先导入、再报错」既安全又不静默：
+	// 错误照旧记录并回传给调用方，只是不再连带丢掉已经花钱拉回来的数据。
+	if fetchErr != nil {
+		s.recordSyncError(ctx, fetchErr)
+		if len(bills) == 0 {
+			return 0, fetchErr
 		}
-		bills[i].CostCNY = decimal.NewFromFloat(bills[i].CostOriginal).
-			Mul(decimal.NewFromFloat(bills[i].FxRateToCNY)).
-			InexactFloat64()
+		logger.LegacyPrintf(
+			"service.reconciliation_sync",
+			"a6_bills_partial_import: fetched=%d err=%v",
+			len(bills), fetchErr,
+		)
 	}
 
-	inserted, err := s.billRepo.UpsertBatch(ctx, bills)
+	inserted, err := s.importBills(ctx, bills)
 	if err != nil {
 		s.recordSyncError(ctx, err)
 		return inserted, err
+	}
+
+	if fetchErr != nil {
+		// 部分导入：错误必须继续挂在页面上（不清 last_sync_error），
+		// 也不算一次成功的同步（不刷新 last_sync_unix），否则运维会以为已经好了。
+		return inserted, fetchErr
 	}
 
 	if err := s.stateRepo.Set(ctx, ReconciliationStateKeyA6LastSyncUnix, strconv.FormatInt(time.Now().UTC().Unix(), 10)); err != nil {
@@ -281,6 +479,27 @@ func (s *ReconciliationSyncService) SyncA6Bills(ctx context.Context, from, to ti
 		logger.LegacyPrintf("service.reconciliation_sync", "a6_sync_error_clear_failed: err=%v", err)
 	}
 	return inserted, nil
+}
+
+// importBills 把上游账单换算并幂等写入。
+//
+// 导入时把换算数字抄到每条账单上，落库即冻结：汇率后来变了也不能回头改历史账单。
+func (s *ReconciliationSyncService) importBills(ctx context.Context, bills []ReconciliationUpstreamBillPayload) (int64, error) {
+	if len(bills) == 0 {
+		return 0, nil
+	}
+
+	fxRate := s.EffectiveFxRate(ctx)
+	for i := range bills {
+		if bills[i].FxRateToCNY <= 0 {
+			bills[i].FxRateToCNY = fxRate
+		}
+		bills[i].CostCNY = decimal.NewFromFloat(bills[i].CostOriginal).
+			Mul(decimal.NewFromFloat(bills[i].FxRateToCNY)).
+			InexactFloat64()
+	}
+
+	return s.billRepo.UpsertBatch(ctx, bills)
 }
 
 func (s *ReconciliationSyncService) recordSyncError(ctx context.Context, cause error) {
@@ -340,7 +559,13 @@ func (s *ReconciliationSyncService) MatchStaging(ctx context.Context, from, to t
 		}
 
 		// 只有过了宽限期仍未匹配上，才认定为孤儿账单。
-		if now.Sub(bill.Payload.OccurredAt) >= s.cfg.MatchGracePeriod {
+		//
+		// 宽限期必须从**账单导入本站的时刻**起算（文档 6.3「账单导入后有宽限期」），
+		// 不能从 occurred_at 起算：账单是上游的历史流水，首次拉取 24 小时窗口时
+		// 每一条 occurred_at 都已经超过 30 分钟，于是所有账单在第一轮就被判定成孤儿，
+		// 宽限期形同不存在——线上表现是「刚导入就整批变孤儿」，而其中大部分其实
+		// 只是还没轮到匹配（下游快照尚未采集齐）。
+		if now.Sub(graceBase(bill)) >= s.cfg.MatchGracePeriod {
 			orphanIDs = append(orphanIDs, bill.ID)
 		}
 	}
@@ -352,6 +577,21 @@ func (s *ReconciliationSyncService) MatchStaging(ctx context.Context, from, to t
 	}
 
 	return matched, int64(len(orphanIDs)), nil
+}
+
+// graceBase 返回孤儿宽限期的起算时刻。
+//
+// 优先用账单入库时间（imported_at）：它才是文档 6.3 说的「账单导入后」。
+// 只有在实现方没能给出入库时间时才退回 occurred_at——那是旧口径，会让首次
+// 拉取的历史账单立刻过期；保留兜底只是为了不让缺字段的实现直接失去孤儿判定能力。
+func graceBase(bill *ReconciliationUpstreamBill) time.Time {
+	if bill == nil {
+		return time.Time{}
+	}
+	if !bill.ImportedAt.IsZero() {
+		return bill.ImportedAt
+	}
+	return bill.Payload.OccurredAt
 }
 
 // resolveAccountIDsForToken 找出某个上游令牌可能对应的本站账号。
@@ -647,6 +887,17 @@ type ReconciliationSyncStatus struct {
 	LastErrorAt     *time.Time
 	FxRate          float64
 	BillSourceReady bool
+
+	// 采集进度可观测字段。它们是 P0 事故的「事前告警面」：
+	// 旧实现在被单轮上限截断时悄无声息，积压只能靠人去猜。
+	//
+	// UsageCursorAt 是采集游标；UsageLastBatchSize 是本轮取到的行数；
+	// UsageBatchTruncated 为 true 表示本轮被上限塞满（仍有行待采集）；
+	// UsageBacklog 是待采集行数（等于 reconciliationBacklogProbeLimit 时表示「至少这么多」）。
+	UsageCursorAt       *time.Time
+	UsageLastBatchSize  int64
+	UsageBatchTruncated bool
+	UsageBacklog        int64
 }
 
 // Status 读取当前同步状态。
@@ -655,6 +906,10 @@ func (s *ReconciliationSyncService) Status(ctx context.Context) (*Reconciliation
 		ReconciliationStateKeyA6LastSyncUnix,
 		ReconciliationStateKeyA6LastSyncError,
 		ReconciliationStateKeyA6LastSyncErrorAt,
+		ReconciliationStateKeyUsageCursor,
+		ReconciliationStateKeyUsageBatchSize,
+		ReconciliationStateKeyUsageTruncated,
+		ReconciliationStateKeyUsageBacklog,
 	}
 	values, err := s.stateRepo.GetMultiple(ctx, keys)
 	if err != nil {
@@ -680,8 +935,27 @@ func (s *ReconciliationSyncService) Status(ctx context.Context) (*Reconciliation
 			status.LastErrorAt = &at
 		}
 	}
+	if raw := strings.TrimSpace(values[ReconciliationStateKeyUsageCursor]); raw != "" {
+		if at, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+			status.UsageCursorAt = &at
+		}
+	}
+	if raw := strings.TrimSpace(values[ReconciliationStateKeyUsageBatchSize]); raw != "" {
+		if size, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && size >= 0 {
+			status.UsageLastBatchSize = size
+		}
+	}
+	status.UsageBatchTruncated = strings.EqualFold(strings.TrimSpace(values[ReconciliationStateKeyUsageTruncated]), "true")
+	if raw := strings.TrimSpace(values[ReconciliationStateKeyUsageBacklog]); raw != "" {
+		if pending, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && pending >= 0 {
+			status.UsageBacklog = pending
+		}
+	}
 	// 采集中枢依赖的状态都可读时就算健康；上游凭据缺失单独由 BillSourceReady 表达，
 	// 不让整个页面显示为故障——本地对账数据依然可用。
+	//
+	// 采集被上限截断**不**算不健康：那是采集器在正常工作、只是没追上写入速度，
+	// 会在后续轮次继续推进。把它算成故障会让页面长期挂着红点，反而没人看。
 	if status.LastError != "" {
 		status.Healthy = false
 	}

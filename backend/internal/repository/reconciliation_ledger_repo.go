@@ -3,42 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
-
-// reconciliationMaxModelsPerAccount 限制规则页为单个账号展示的模型名数量，
-// 避免高频账号把接口响应撑得过大。
-const reconciliationMaxModelsPerAccount = 12
-
-// splitReconciliationModels 把 SQL 聚合出的逗号分隔模型名拆成去重切片。
-func splitReconciliationModels(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	seen := make(map[string]struct{}, len(parts))
-	models := make([]string, 0, len(parts))
-	for _, part := range parts {
-		name := strings.TrimSpace(part)
-		if name == "" {
-			continue
-		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
-		models = append(models, name)
-		if len(models) >= reconciliationMaxModelsPerAccount {
-			break
-		}
-	}
-	return models
-}
 
 // reconciliationLedgerCTE 构造对账读模型的基础数据集。
 //
@@ -397,18 +366,22 @@ LIMIT $3 OFFSET $4
 	return items, total, nil
 }
 
-// UsageCountsByAccount 返回窗口内各账号的调用数、首末调用时间与使用过的模型。
+// UsageCountsByAccount 返回窗口内各账号的调用数与首末调用时间。
 //
 // 规则页需要列出「全部账号」，本方法只提供有调用的那部分数据，
 // 零调用账号由上层与服务层组合补齐，保证管理员仍能为新账号配置规则。
+//
+// 这里刻意**不**取模型名：文档 19 要求「范围内调用」严格按窗口，而「最近模型」
+// 要读全历史最后一次调用。两者口径不同，先前的 string_agg(DISTINCT model)
+// 把窗口内所有模型塞进一列，恰好把「最近模型」这个最关键的线索抹成了模糊列表。
+// 最近模型改由 RecentUsageByAccount 提供。
 func (r *reconciliationLedgerRepository) UsageCountsByAccount(ctx context.Context, from, to time.Time) (map[int64]service.ReconciliationAccountUsage, error) {
 	query := `
 SELECT
     account_id,
     COUNT(*) AS usage_count,
     MIN(created_at) AS first_seen,
-    MAX(created_at) AS last_seen,
-    COALESCE(string_agg(DISTINCT model, ','), '') AS models
+    MAX(created_at) AS last_seen
 FROM usage_logs
 WHERE created_at >= $1 AND created_at < $2 AND account_id IS NOT NULL
 GROUP BY account_id
@@ -423,12 +396,60 @@ GROUP BY account_id
 	result := make(map[int64]service.ReconciliationAccountUsage)
 	for rows.Next() {
 		var usage service.ReconciliationAccountUsage
-		var models string
-		if err := rows.Scan(&usage.AccountID, &usage.Count, &usage.FirstSeen, &usage.LastSeen, &models); err != nil {
+		if err := rows.Scan(&usage.AccountID, &usage.Count, &usage.FirstSeen, &usage.LastSeen); err != nil {
 			return nil, err
 		}
-		usage.Models = splitReconciliationModels(models)
 		result[usage.AccountID] = usage
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// RecentUsageByAccount 返回各账号全历史最后一次调用的模型与分组。
+//
+// 用 DISTINCT ON 一次查完所有账号，而不是逐账号发一条「ORDER BY created_at DESC
+// LIMIT 1」：规则页要列出全部账号，逐账号查询会把一次页面加载放大成 N 次往返。
+// 排序键 (account_id, created_at DESC, id DESC) 与 DISTINCT ON (account_id) 对齐，
+// 因此同一毫秒上的多条调用也能选出确定的那一条（主键更大的更晚）。
+//
+// 分组名走 LEFT JOIN：历史调用引用的分组可能已经被删除，那种情况下
+// 分组名为空串但仍保留 group_id，前端会显示成「已删除分组」而不是丢掉这条线索。
+func (r *reconciliationLedgerRepository) RecentUsageByAccount(ctx context.Context) (map[int64]service.ReconciliationRecentUsage, error) {
+	query := `
+SELECT
+    latest.account_id,
+    COALESCE(latest.model, '') AS model,
+    COALESCE(latest.group_id, 0) AS group_id,
+    COALESCE(g.name, '') AS group_name
+FROM (
+    SELECT DISTINCT ON (account_id)
+        account_id,
+        model,
+        group_id,
+        created_at,
+        id
+    FROM usage_logs
+    WHERE account_id IS NOT NULL
+    ORDER BY account_id, created_at DESC, id DESC
+) AS latest
+LEFT JOIN groups g ON g.id = latest.group_id
+`
+
+	rows, err := r.sql.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[int64]service.ReconciliationRecentUsage)
+	for rows.Next() {
+		var recent service.ReconciliationRecentUsage
+		if err := rows.Scan(&recent.AccountID, &recent.Model, &recent.GroupID, &recent.GroupName); err != nil {
+			return nil, err
+		}
+		result[recent.AccountID] = recent
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

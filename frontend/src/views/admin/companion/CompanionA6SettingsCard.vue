@@ -96,6 +96,24 @@
               :disabled="busy"
               @input="onTouch"
             />
+            <!-- 这里必须写清「不是分组名/账号名/令牌名」：线上真实踩过把中文分组名填进来
+                 的坑，而 A6（new-api）只会回一句笼统的 401，让人完全看不出问题在哪。
+                 非数字只改颜色与措辞提示、不拦截保存，理由见 userIdLooksInvalid。 -->
+            <p
+              class="mt-1 text-xs"
+              :class="
+                userIdLooksInvalid
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-gray-500 dark:text-gray-400'
+              "
+              data-testid="a6-settings-user-id-hint"
+            >
+              {{
+                userIdLooksInvalid
+                  ? t('admin.companion.settings.userIdWarning')
+                  : t('admin.companion.settings.userIdHint')
+              }}
+            </p>
           </div>
 
           <div class="min-w-0">
@@ -311,6 +329,20 @@ const overrideKeys = computed(() =>
     label: OVERRIDE_LABEL_KEY[key] ? t(OVERRIDE_LABEL_KEY[key]) : key
   }))
 )
+
+/**
+ * 「A6 用户标识」看起来不像纯数字用户 ID 时给出提示。
+ *
+ * 只提示、不拦截保存。依据有二：
+ *  1. 拦截会挡住修复路径——填错的值改不动，管理员连「先改汇率、回头再修用户标识」都做不到；
+ *  2. A6（new-api）自己对非法值会明确报 New-Api-User header format error，
+ *     真错了由连接状态与错误详情来说话，比前端猜更准。
+ * 这一条与「已填写 ≠ 已验证」是同一个原则：前端只负责把话说清楚，不下结论。
+ */
+const userIdLooksInvalid = computed(() => {
+  const value = draft.value.userId.trim()
+  return value !== '' && !/^\d+$/.test(value)
+})
 
 /**
  * 按「只提交改动过的字段」组装请求体：后端把缺省/空串一律当作不改动，

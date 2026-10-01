@@ -24,7 +24,17 @@
                 >
                   {{ statusLabel }}
                 </span>
-                <span v-if="lastUpdated" class="text-xs text-gray-400 dark:text-gray-500">
+                <!-- 不可达时优先展示「最近失败」：那才是排查要看的时刻。
+                     「更新于」是页面刷新时刻，在故障场景下只会误导人。
+                     三分支互斥，任何时刻仍只渲染一个行内 span：卡片不新增行、不改变高度。 -->
+                <span
+                  v-if="statusTone === 'unhealthy' && lastErrorAtText"
+                  class="text-xs text-gray-400 dark:text-gray-500"
+                  data-testid="companion-last-error-at"
+                >
+                  {{ t('admin.companion.status.lastErrorAt', { time: lastErrorAtText }) }}
+                </span>
+                <span v-else-if="lastUpdated" class="text-xs text-gray-400 dark:text-gray-500">
                   {{ t('admin.companion.updatedAt', { time: lastUpdatedText }) }}
                 </span>
                 <span v-else class="text-xs text-gray-400 dark:text-gray-500">
@@ -33,6 +43,16 @@
               </div>
               <p v-if="statusDetail" class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.companion.status.detailLabel') }}: {{ statusDetail }}
+              </p>
+              <!-- 采集积压告警：单轮上限被塞满时游标只推进到本批最后一行，
+                   后面的调用要等下一轮。积压数字必须让人看见——它是「收入正在少算」
+                   的唯一信号，藏在日志里等于没有。 -->
+              <p
+                v-if="usageBacklogText"
+                class="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400"
+                data-testid="companion-usage-backlog"
+              >
+                {{ usageBacklogText }}
               </p>
             </div>
           </div>
@@ -666,15 +686,18 @@ function stopTimer() {
 
 // ==================== 账号规则 ====================
 
-async function onRuleSave(payload: { accountId: number; provider: 'a6' | 'subarx'; value: string }) {
+// 保存规则：上游类型固定为 a6。
+//
+// Subarx 分支已删除：后端 ValidateRuleInput 只接受 a6，提交 subarx 必定返回
+// 400 COMPANION_BAD_REQUEST（文档 5.4：Subarx 已下线）。留着那条分支等于给
+// 用户一个必然失败的按钮。
+async function onRuleSave(payload: { accountId: number; value: string }) {
   savingId.value = payload.accountId
   try {
-    await companionAPI.upsertAccountRule(
-      payload.accountId,
-      payload.provider === 'a6'
-        ? { provider: 'a6', token_name: payload.value }
-        : { provider: 'subarx', multiplier: payload.value }
-    )
+    await companionAPI.upsertAccountRule(payload.accountId, {
+      provider: 'a6',
+      token_name: payload.value
+    })
     appStore.showSuccess(t('admin.companion.rules.saved', { id: payload.accountId }))
     await load()
   } catch (err) {
@@ -720,10 +743,44 @@ const showSetupGuide = computed(() => notConfigured.value || a6TokenMissing.valu
 
 const statusDetail = computed(() => statusInfo.value?.detail || statusError.value?.message || '')
 
+/**
+ * 真实的失败发生时间，来自 reconciliation_sync_state.a6_last_sync_error_at。
+ *
+ * 与 lastUpdated（页面刷新时刻）不是一回事：页面上原来只显示「更新于」，于是
+ * 「上游 11:58 挂了，我 12:03 刷新页面」会被渲染成「更新于 12:03:00」，
+ * 管理员完全看不到故障是什么时候开始的。后端用毫秒精度的 RFC3339 下发，这里只取本地时分秒。
+ */
+const lastErrorAtText = computed(() => {
+  const raw = statusInfo.value?.last_error_at
+  if (!raw) return ''
+  const at = new Date(raw)
+  return Number.isNaN(at.getTime()) ? '' : at.toLocaleTimeString()
+})
+
 /** 引导卡片的原因行：令牌缺失时用固定文案，其余情况直接展示探测详情 */
 const guideCause = computed(() =>
   a6TokenMissing.value ? t('admin.companion.status.notConfigured') : statusDetail.value
 )
+
+/**
+ * 采集积压提示。
+ *
+ * 只有在「本轮被单轮上限截断」时才提示：此时分页游标停在已采集位置，
+ * 后面的调用要等下一轮（30 秒）才补上，看板上会短暂显示偏低的收入。
+ * 没被截断时不显示，避免制造无意义的焦虑。
+ *
+ * 数字来自 reconciliation_sync_state.usage_pending_backlog，
+ * 由采集器在截断的那一轮顺手数出来（探针上限 10 万，等于上限就表示「至少这么多」）。
+ */
+const usageBacklogText = computed(() => {
+  const status = statusInfo.value
+  if (!status || !status.usage_batch_truncated) return ''
+  const backlog = status.usage_backlog ?? 0
+  if (backlog > 0) {
+    return t('admin.companion.status.usageBacklog', { count: backlog })
+  }
+  return t('admin.companion.status.usageTruncated')
+})
 
 /**
  * 状态语气，优先级：未配置 > 不可达 > 已连接。

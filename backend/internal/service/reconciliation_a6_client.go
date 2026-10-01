@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +66,16 @@ const (
 	a6MaxJSONUnwrapLayers = 3
 	// a6UpstreamMessageLimit 上游 message 写进错误信息时的最大字符数，避免超长文本进日志。
 	a6UpstreamMessageLimit = 200
+	// a6ErrorBodySnippetBytes 上游非 2xx 响应体写进错误详情时的最大字节数。
+	//
+	// 512 字节足以装下 new-api 那句真正说明原因的
+	// {"message":"Unauthorized, invalid access token","success":false}，
+	// 又不会让一段超大 body 污染日志与页面上的一行错误详情。
+	// 与 a6UpstreamMessageLimit 的区别：那个按「字符」限制 JSON 里的 message 字段，
+	// 这个按「字节」限制整段原始响应体。
+	a6ErrorBodySnippetBytes = 512
+	// a6RedactedValue 脱敏后替换成的占位串。
+	a6RedactedValue = "***"
 
 	// a6MinPlausibleUnix 时间戳合理区间下限（2000-01-01 UTC），更低的值视为脏数据。
 	a6MinPlausibleUnix int64 = 946_684_800
@@ -740,16 +751,26 @@ func (c *A6Client) getJSON(ctx context.Context, cfg ReconciliationA6Config, path
 		_ = resp.Body.Close()
 	}()
 
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		// 认证类失败单独成型：上层要能给出「凭据无效」而不是「网络不通」。
-		return nil, ErrReconciliationA6AuthFailed.WithMetadata(map[string]string{
-			"upstream_status": strconv.Itoa(resp.StatusCode),
-		})
-	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		return nil, ErrReconciliationA6RequestFailed.WithMetadata(map[string]string{
-			"upstream_status": strconv.Itoa(resp.StatusCode),
-		})
+	// 上游非 2xx 时先取一段响应体再判状态码。
+	//
+	// 旧实现在这里什么都不读，body 直接被下面的 defer 丢进 io.Discard，于是 A6（new-api）
+	// 401 响应体里那句真正的原因——{"message":"Unauthorized, invalid access token"}——
+	// 永远不会出现在日志和页面上，管理员只能看到笼统的「upstream 401」，只能靠猜。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet := a6ReadErrorBodySnippet(resp.Body, cfg)
+		metadata := map[string]string{"upstream_status": strconv.Itoa(resp.StatusCode)}
+		if snippet != "" {
+			// 已经过脱敏与截断，可以安全地进错误详情：它会被 recordSyncError 持久化到
+			// reconciliation_sync_state，并随 /status 的 detail 展示在页面上。
+			// 服务端日志不另开一行——getJSONWithRetry 的 request_retry / request_failed
+			// 都用 err=%v 打印，而 ApplicationError.Error() 带 metadata，片段自然落进日志。
+			metadata["upstream_message"] = snippet
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			// 认证类失败单独成型：上层要能给出「凭据无效」而不是「网络不通」。
+			return nil, ErrReconciliationA6AuthFailed.WithMetadata(metadata)
+		}
+		return nil, ErrReconciliationA6RequestFailed.WithMetadata(metadata)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, a6MaxResponseBytes+1))
@@ -785,6 +806,81 @@ func a6ClassifyTransportError(err error) error {
 		return ErrReconciliationA6Timeout.WithCause(err)
 	}
 	return ErrReconciliationA6RequestFailed.WithCause(err)
+}
+
+// ==================== 上游失败响应体的脱敏 ====================
+//
+// 上游的失败响应体是排障的第一手材料，但它同时是最可能夹带凭据的地方（上游把收到的
+// Authorization 原样回显、或者顺手把别的密钥写进 message）。因此这里遵循「先脱敏、
+// 再截断、才允许外流」的顺序：任何一段片段都先过 a6RedactCredentials，再进日志与错误详情。
+
+var (
+	// a6CredentialFieldPattern 匹配「键名 + 值」形态的凭据字段，只遮蔽值、保留键名，
+	// 这样管理员依然能看出上游在抱怨哪一个字段（例如 "access_token":"***"）。
+	a6CredentialFieldPattern = regexp.MustCompile(
+		`(?i)"(access[_-]?token|refresh[_-]?token|token|api[_-]?key|apikey|key|secret|password|authorization)"\s*:\s*"[^"]*"`,
+	)
+	// a6BearerPattern 匹配任何形态的 Bearer 凭据。
+	a6BearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}`)
+	// a6SkKeyPattern 匹配 OpenAI / new-api 风格的 sk- 密钥（短于 16 位的一律放过，
+	// 避免把 sk-4o 这类模型名误伤成密钥）。
+	a6SkKeyPattern = regexp.MustCompile(`\bsk-[A-Za-z0-9._-]{16,}`)
+	// a6HeaderLinePattern 匹配 "Name: value" 形态的头部回显（换行已被折叠成空格）。
+	// 值里可能带 "Bearer " 前缀，一并吃掉，避免遮蔽后留下 "Bearer ***" 这种半截形态。
+	a6HeaderLinePattern = regexp.MustCompile(`(?i)\b(authorization|x-api-key|new-api-user)\b\s*[:=]\s*(?:bearer\s+)?\S+`)
+)
+
+// a6RedactCredentials 抹掉片段里可能出现的凭据，保证令牌永不进日志、永不进错误详情。
+//
+// 三层防护，从最确定到最泛化：
+//  1. 精确替换本次请求实际使用的访问令牌——上游偶尔会把收到的值原样回显；
+//  2. 按键名遮蔽 token / api_key / secret / password 一类字段的值；
+//  3. 按形态遮蔽 Bearer 凭据与 sk- 密钥，覆盖上游回显了「别的」密钥的情况。
+//
+// 刻意不脱敏 UserID：它是诊断的关键信息（本项目就踩过「用户标识填成分组名」的坑），
+// 且本身不是密钥。
+func a6RedactCredentials(snippet string, cfg ReconciliationA6Config) string {
+	if snippet == "" {
+		return ""
+	}
+	if token := strings.TrimSpace(cfg.AccessToken); token != "" {
+		snippet = strings.ReplaceAll(snippet, token, a6RedactedValue)
+	}
+	snippet = a6CredentialFieldPattern.ReplaceAllString(snippet, `"$1":"`+a6RedactedValue+`"`)
+	snippet = a6HeaderLinePattern.ReplaceAllString(snippet, `${1}: `+a6RedactedValue)
+	snippet = a6BearerPattern.ReplaceAllString(snippet, "Bearer "+a6RedactedValue)
+	snippet = a6SkKeyPattern.ReplaceAllString(snippet, a6RedactedValue)
+	return snippet
+}
+
+// a6ReadErrorBodySnippet 读一小段非 2xx 响应体，压成一行并脱敏，供错误详情与日志使用。
+//
+// 只读 a6ErrorBodySnippetBytes(+1，用于判断是否发生截断) 字节：既拿到上游的原话，
+// 又不会把超大 body 拉进内存；剩余部分仍由 getJSON 的 defer 读掉一点后 Close 丢弃。
+// 读取失败不升级为错误：少一条线索可以接受，改变「上游拒绝」这个结论不行。
+func a6ReadErrorBodySnippet(body io.Reader, cfg ReconciliationA6Config) string {
+	if body == nil {
+		return ""
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, a6ErrorBodySnippetBytes+1))
+	if err != nil && len(raw) == 0 {
+		return ""
+	}
+	truncated := len(raw) > a6ErrorBodySnippetBytes
+	if truncated {
+		raw = raw[:a6ErrorBodySnippetBytes]
+	}
+	// 截断可能把多字节字符切成两半，丢掉尾部那个不完整的字节。
+	text := strings.TrimSpace(strings.ToValidUTF8(string(raw), ""))
+	// 折叠空白：错误详情在页面上是一行，日志里也不该被 body 里的换行冲散。
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	if truncated {
+		text += "..."
+	}
+	return a6RedactCredentials(text, cfg)
 }
 
 // a6CheckSuccess 检查响应信封的 success 字段（可能是 bool、数字或字符串）。

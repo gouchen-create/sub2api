@@ -31,6 +31,11 @@ const reconciliationMaxExternalKeyLen = 128
 //
 // 它按「账号」而不是「规则」组织：没有规则的账号同样会出现，这样管理员才能在
 // 面板上为任何一个账号补规则。列表永远不空，避免出现无从下手的空页面。
+//
+// GroupChannelCount 是该分组的真实渠道（账号）数，与主站分组页 account_count 同口径
+// （只算未软删账号）。它不等于「本表格里该分组的行数」：一行是一个账号，而账号可以同时
+// 属于多个分组、这里只展示它优先级最高的那一个，所以同一个分组出现在几行上、以及每个
+// 分组到底有几个渠道，是两件不同的事。
 type ReconciliationAccountRuleView struct {
 	AccountID   int64
 	Provider    string
@@ -45,9 +50,10 @@ type ReconciliationAccountRuleView struct {
 	// Current 表示该账号当前是否处于可用调度状态。
 	Current bool
 
-	GroupID       int64
-	GroupName     string
-	GroupPriority int
+	GroupID           int64
+	GroupName         string
+	GroupPriority     int
+	GroupChannelCount int64
 
 	AccountName        string
 	AccountPlatform    string
@@ -57,7 +63,15 @@ type ReconciliationAccountRuleView struct {
 	UsageCount int64
 	FirstSeen  *time.Time
 	LastSeen   *time.Time
-	Models     []string
+
+	// RecentModel / RecentGroup* 来自该账号**全历史最后一次调用**，不受筛选窗口影响。
+	//
+	// 「最近模型」是管理员登记上游令牌名时最重要的线索（文档 19：最近分组 / 最近模型
+	// 读取该账号全历史最后一次调用）。它跟 UsageCount / FirstSeen / LastSeen 的口径
+	// 刻意不同：后三个是「范围内」的统计，Recent* 是账号身份信息，窗口抹不掉。
+	RecentModel     string
+	RecentGroupID   int64
+	RecentGroupName string
 }
 
 // ReconciliationAccountRuleList 是规则页的完整响应载荷。
@@ -137,6 +151,20 @@ func (s *ReconciliationAccountRuleService) List(ctx context.Context, from, to ti
 		return nil, err
 	}
 
+	// 最近模型 / 最近分组走全历史查询，与窗口内的用量统计分开取：
+	// 一次 DISTINCT ON 查询覆盖全部账号，比逐账号查「最后一次调用」少 N 次往返。
+	recentByAccount, err := s.ledgerSvc.RecentUsageByAccount(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// 分组的真实渠道数单独统计：它回答的是「这个分组一共挂了几个渠道」，
+	// 不是「这个分组在本表格里占了几行」——后者会少算（账号只能展示一个分组）。
+	groupChannelCounts, err := s.ruleRepo.CountAccountsByGroup(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	items := make([]ReconciliationAccountRuleView, 0, len(accounts))
 	var unconfigured int64
 	for i := range accounts {
@@ -153,6 +181,7 @@ func (s *ReconciliationAccountRuleService) List(ctx context.Context, from, to ti
 			AccountSchedulable: account.Schedulable,
 		}
 		view.GroupID, view.GroupName, view.GroupPriority = reconcileAccountGroup(account)
+		view.GroupChannelCount = groupChannelCounts[view.GroupID]
 
 		if rule, ok := rulesByAccount[account.ID]; ok {
 			view.Provider = rule.Provider
@@ -167,13 +196,20 @@ func (s *ReconciliationAccountRuleService) List(ctx context.Context, from, to ti
 
 		if usage, ok := usageByAccount[account.ID]; ok {
 			view.UsageCount = usage.Count
-			view.Models = usage.Models
 			firstSeen, lastSeen := usage.FirstSeen, usage.LastSeen
 			view.FirstSeen = &firstSeen
 			view.LastSeen = &lastSeen
 			if !view.Configured {
 				unconfigured++
 			}
+		}
+
+		// 最近一次调用的信息独立赋值：账号可能在本窗口内没有任何调用，
+		// 但历史上跑过——那种账号更要显示最近模型/分组，它正是「给不给它配规则」的依据。
+		if recent, ok := recentByAccount[account.ID]; ok {
+			view.RecentModel = recent.Model
+			view.RecentGroupID = recent.GroupID
+			view.RecentGroupName = recent.GroupName
 		}
 
 		items = append(items, view)

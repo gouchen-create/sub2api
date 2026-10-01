@@ -4,6 +4,8 @@ import (
 	"context"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	dbaccount "github.com/Wei-Shaw/sub2api/ent/account"
+	dbaccountgroup "github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	"github.com/Wei-Shaw/sub2api/ent/reconciliationaccountrule"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -121,6 +123,40 @@ func (r *reconciliationAccountRuleRepository) Delete(ctx context.Context, accoun
 		return 0, translatePersistenceError(err, nil, nil)
 	}
 	return int64(affected), nil
+}
+
+// CountAccountsByGroup 统计每个分组当前关联的真实渠道（账号）数。
+//
+// 口径与主站分组页的 group.account_count 完全一致——即 groupRepository.loadAccountCounts
+// 里那条 total 表达式：
+//
+//	SELECT ag.group_id, COUNT(*) FROM account_groups ag
+//	JOIN accounts a ON a.id = ag.account_id
+//	WHERE a.deleted_at IS NULL
+//	GROUP BY ag.group_id
+//
+// 这里不自己拼 SQL，而是走 ent 的 AccountGroup 查询：Account 的 SoftDeleteMixin 会把
+// deleted_at IS NULL 作为子查询条件带进 HasAccountWith，与主站那条 JOIN 的过滤条件同义。
+//
+// 刻意不复用规则页那次「取全部账号」的结果去数行：那个结果集会随页面过滤条件变化，
+// 一旦有人在 ListAllWithFilters 上加个筛选，页面上的「M 个渠道」会静默变小。
+// 独立的统计查询才能保证这个数字永远是真实值。
+func (r *reconciliationAccountRuleRepository) CountAccountsByGroup(ctx context.Context) (map[int64]int64, error) {
+	client := clientFromContext(ctx, r.client)
+
+	var groupIDs []int64
+	if err := client.AccountGroup.Query().
+		Where(dbaccountgroup.HasAccountWith(dbaccount.DeletedAtIsNil())).
+		Select(dbaccountgroup.FieldGroupID).
+		Scan(ctx, &groupIDs); err != nil {
+		return nil, translatePersistenceError(err, nil, nil)
+	}
+
+	counts := make(map[int64]int64, len(groupIDs))
+	for _, groupID := range groupIDs {
+		counts[groupID]++
+	}
+	return counts, nil
 }
 
 // toReconciliationAccountRule 把 ent 实体转换为服务层规则模型。

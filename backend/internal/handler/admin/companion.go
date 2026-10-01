@@ -137,6 +137,16 @@ func companionRFC3339(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// companionRFC3339Millis 是 companionRFC3339 的毫秒精度变体。
+//
+// companionRFC3339 用 RFC3339Nano，会产出 9 位小数（如 2026-10-01T04:14:59.459253264Z）。
+// ECMAScript 的 Date Time String Format 只定义了 3 位小数，多出来的位数目前只是靠浏览器
+// 宽松截断才能解析——那是实现细节，不是可以依赖的契约。凡是要交给前端 new Date() 的
+// 新增时间字段一律用这个函数，把精度钉死在毫秒，不给自己埋坑。
+func companionRFC3339Millis(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
 // ==================== 状态 ====================
 
 // companionA6NotConfiguredDetail 是 A6 凭据缺失时的提示文案。
@@ -171,7 +181,25 @@ func (h *CompanionHandler) Status(c *gin.Context) {
 	case status.LastError != "":
 		payload["healthy"] = false
 		payload["detail"] = status.LastError
+		// 真实失败时间：页面上的「更新于」是页面刷新时间，会掩盖错误实际发生的时刻。
+		// 只在确实存在一条失败记录时给出——成功一轮只清 a6_last_sync_error，并不清
+		// a6_last_sync_error_at，所以这个时间戳单独看有可能已经过期。
+		if status.LastErrorAt != nil {
+			payload["last_error_at"] = companionRFC3339Millis(*status.LastErrorAt)
+		}
 	}
+
+	// 采集进度单独输出：它回答的是「下游用量有没有追平」，
+	// 与「A6 上游账单能不能拉」是两条独立的链路，缺一不可。
+	//
+	// 这里只增字段、不改既有键与取值：前端与外部脚本都靠 healthy/detail 判断可用性。
+	if status.UsageCursorAt != nil {
+		payload["usage_cursor_at"] = companionRFC3339Millis(*status.UsageCursorAt)
+	}
+	payload["usage_last_batch_size"] = status.UsageLastBatchSize
+	payload["usage_batch_truncated"] = status.UsageBatchTruncated
+	payload["usage_backlog"] = status.UsageBacklog
+
 	response.Success(c, payload)
 }
 
@@ -485,16 +513,22 @@ func (h *CompanionHandler) Requests(c *gin.Context) {
 	pageSize := parseCompanionInt(c.Query("page_size"), service.ReconciliationDefaultPageSize)
 	status := strings.TrimSpace(c.Query("status"))
 
+	// 先在接口层归一化，再把生效值交给服务层并原样回显。
+	//
+	// 归一化必须只有一份实现：旧代码里接口层「越界就退回 50」、服务层「越界就截到 100」，
+	// 于是 ?page_size=200 实际按 100 取数、响应却回显 50、total_pages 也按 50 算，
+	// 前端据此渲染的分页控件与真实数据集对不上。status 同理：传 bogus 时返回的是
+	// 全量数据，回显却写着 "bogus"。
+	if page < 1 {
+		page = 1
+	}
+	pageSize = service.NormalizeReconciliationPageSize(pageSize)
+	status = service.NormalizeReconciliationStatus(status)
+
 	rows, total, err := h.ledgerSvc.Requests(c.Request.Context(), from, to, status, page, pageSize)
 	if err != nil {
 		writeReconciliationError(c, err)
 		return
-	}
-	if pageSize < 1 || pageSize > service.ReconciliationMaxPageSize {
-		pageSize = service.ReconciliationDefaultPageSize
-	}
-	if page < 1 {
-		page = 1
 	}
 
 	fxRate := h.syncSvc.EffectiveFxRate(c.Request.Context())
@@ -567,6 +601,12 @@ func (h *CompanionHandler) Requests(c *gin.Context) {
 
 // ==================== 账号规则 ====================
 
+// companionAccountRuleDTO 是账号规则列表的一行。
+//
+// GroupChannelCount 是该分组的真实渠道数（与主站分组页 account_count 同口径，只算未软删
+// 账号），不是本列表里该分组的行数——一行是一个账号，账号只展示它优先级最高的那个分组，
+// 按行数统计会把「展示位被别的分组抢走」的成员当成不存在（dev 库真实踩过：分组 7 有 2 个
+// 渠道却显示 1 个）。
 type companionAccountRuleDTO struct {
 	AccountID          int64  `json:"account_id"`
 	Provider           string `json:"provider"`
@@ -581,6 +621,7 @@ type companionAccountRuleDTO struct {
 	GroupID            int64  `json:"group_id"`
 	GroupName          string `json:"group_name"`
 	GroupPriority      int    `json:"group_priority"`
+	GroupChannelCount  int64  `json:"group_channel_count"`
 	AccountName        string `json:"account_name"`
 	AccountPlatform    string `json:"account_platform"`
 	AccountStatus      string `json:"account_status"`
@@ -588,7 +629,12 @@ type companionAccountRuleDTO struct {
 	UsageCount         int64  `json:"usage_count"`
 	FirstSeen          string `json:"first_seen"`
 	LastSeen           string `json:"last_seen"`
-	Models             string `json:"models"`
+	// RecentModel / RecentGroup* 是账号**全历史最后一次调用**的模型与分组，
+	// 不受请求里的时间筛选影响（文档 19）。Field 名与语义都刻意与窗口内的
+	// usage_count / first_seen / last_seen 区分开。
+	RecentModel     string `json:"recent_model"`
+	RecentGroupID   int64  `json:"recent_group_id"`
+	RecentGroupName string `json:"recent_group_name"`
 }
 
 type companionAccountRuleListDTO struct {
@@ -610,13 +656,15 @@ func toCompanionAccountRuleDTO(view *service.ReconciliationAccountRuleView) comp
 		GroupID:            view.GroupID,
 		GroupName:          view.GroupName,
 		GroupPriority:      view.GroupPriority,
+		GroupChannelCount:  view.GroupChannelCount,
 		AccountName:        view.AccountName,
 		AccountPlatform:    view.AccountPlatform,
 		AccountStatus:      view.AccountStatus,
 		AccountSchedulable: view.AccountSchedulable,
 		UsageCount:         view.UsageCount,
-		// 前端把 models 当字符串渲染，多个模型用逗号分隔。
-		Models: strings.Join(view.Models, ", "),
+		RecentModel:        view.RecentModel,
+		RecentGroupID:      view.RecentGroupID,
+		RecentGroupName:    view.RecentGroupName,
 	}
 	if view.Multiplier != nil {
 		dto.Multiplier = strconv.FormatFloat(*view.Multiplier, 'f', -1, 64)

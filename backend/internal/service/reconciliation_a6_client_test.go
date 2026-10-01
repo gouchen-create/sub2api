@@ -17,6 +17,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -241,6 +242,97 @@ func TestReconciliationA6ClientAuthFailureIsDistinguishable(t *testing.T) {
 	})
 	_, err = forbidden.FetchBillsPage(context.Background(), a6TestQuery(), 1)
 	require.True(t, IsReconciliationA6AuthError(err), "403 同样归入凭据类失败")
+}
+
+// TestReconciliationA6ClientAuthFailureCarriesUpstreamBodySnippet 验证 401 时不再丢弃 A6 的响应体。
+//
+// A6 是 new-api 部署，它把真正的原因写在 401 的 body 里；旧实现在判断状态码之前就把 body
+// 丢进 io.Discard，于是线上只能看到笼统的 upstream 401，管理员只能靠猜。
+func TestReconciliationA6ClientAuthFailureCarriesUpstreamBodySnippet(t *testing.T) {
+	const upstreamBody = `{"message":"Unauthorized, invalid access token","success":false}`
+	client, _ := newA6TestClient(t, "500000", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(upstreamBody))
+	})
+
+	_, err := client.FetchBillsPage(context.Background(), a6TestQuery(), 1)
+	require.Error(t, err)
+	require.True(t, IsReconciliationA6AuthError(err))
+
+	appErr := infraerrors.FromError(err)
+	// 契约不变：认证失败仍然映射成 502，绝不向上返回 401/403。
+	require.Equal(t, http.StatusBadGateway, infraerrors.Code(err))
+	require.Equal(t, "RECONCILIATION_A6_AUTH_FAILED", appErr.Reason)
+	require.Equal(t, "401", appErr.Metadata["upstream_status"], "metadata.upstream_status 必须保留")
+	require.Contains(t, appErr.Metadata["upstream_message"], "invalid access token",
+		"401 的错误详情必须带上 A6 的原话")
+	// err.Error() 就是 getJSONWithRetry 用 err=%v 打进服务端日志、以及 recordSyncError
+	// 落进 reconciliation_sync_state 的那份文本，因此它也必须带原话。
+	require.Contains(t, err.Error(), "invalid access token")
+}
+
+// TestReconciliationA6ClientErrorBodySnippetIsRedacted 验证响应体片段先脱敏再外流。
+func TestReconciliationA6ClientErrorBodySnippetIsRedacted(t *testing.T) {
+	const leakedSecret = "sk-abcdefghijklmnopqrstuvwxyz"
+	body := `{"message":"invalid access token ` + a6TestAccessToken +
+		`","access_token":"` + a6TestAccessToken +
+		`","hint":"Authorization: Bearer ` + a6TestAccessToken +
+		`","key":"` + leakedSecret + `"}`
+	client, _ := newA6TestClient(t, "500000", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(body))
+	})
+
+	_, err := client.getJSON(context.Background(), client.Config(), a6SelfLogPath,
+		a6BillQueryParams(a6TestQuery(), 1, a6DefaultPageSize))
+	require.Error(t, err)
+
+	appErr := infraerrors.FromError(err)
+	snippet := appErr.Metadata["upstream_message"]
+	require.NotEmpty(t, snippet, "401 的错误详情必须带响应体片段")
+	require.Equal(t, "401", appErr.Metadata["upstream_status"])
+	// 用 assert 而不是 require：任何一个脱敏口子破了都要看到全部结果，不能被 FailNow 截断。
+	assert.NotContains(t, snippet, a6TestAccessToken, "本次请求使用的访问令牌绝不能外流")
+	assert.NotContains(t, snippet, leakedSecret, "上游回显的 sk- 密钥必须被遮蔽")
+	assert.Contains(t, snippet, `"access_token":"`+a6RedactedValue+`"`, "按键名遮蔽值、保留键名")
+	assert.Contains(t, snippet, "Authorization: "+a6RedactedValue, "Authorization 回显必须被整段遮蔽")
+}
+
+// TestReconciliationA6ClientErrorBodySnippetIsTruncated 验证超大响应体只留一小段。
+func TestReconciliationA6ClientErrorBodySnippetIsTruncated(t *testing.T) {
+	client, _ := newA6TestClient(t, "500000", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"` + strings.Repeat("x", a6ErrorBodySnippetBytes*2) + `"}`))
+	})
+
+	_, err := client.getJSON(context.Background(), client.Config(), a6SelfLogPath,
+		a6BillQueryParams(a6TestQuery(), 1, a6DefaultPageSize))
+	require.Error(t, err)
+
+	appErr := infraerrors.FromError(err)
+	snippet := appErr.Metadata["upstream_message"]
+	require.NotEmpty(t, snippet, "非认证类的非 2xx 同样要带上原话")
+	require.Equal(t, "RECONCILIATION_A6_REQUEST_FAILED", appErr.Reason)
+	require.Equal(t, "500", appErr.Metadata["upstream_status"])
+	assert.True(t, len(snippet) <= a6ErrorBodySnippetBytes+len("..."),
+		"片段必须被截断，避免超大 body 污染日志，实际长度=%d", len(snippet))
+	assert.True(t, strings.HasSuffix(snippet, "..."), "截断后应带省略号")
+}
+
+// TestReconciliationA6ClientEmptyErrorBodyKeepsUpstreamStatus 验证空响应体不产生空片段。
+func TestReconciliationA6ClientEmptyErrorBodyKeepsUpstreamStatus(t *testing.T) {
+	client, _ := newA6TestClient(t, "500000", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	_, err := client.getJSON(context.Background(), client.Config(), a6SelfLogPath,
+		a6BillQueryParams(a6TestQuery(), 1, a6DefaultPageSize))
+	require.Error(t, err)
+
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "403", appErr.Metadata["upstream_status"])
+	_, hasSnippet := appErr.Metadata["upstream_message"]
+	assert.False(t, hasSnippet, "空 body 不该塞一个空的 upstream_message 进详情")
 }
 
 func TestReconciliationA6ClientUpstreamRejectionIsNotARetryableShape(t *testing.T) {

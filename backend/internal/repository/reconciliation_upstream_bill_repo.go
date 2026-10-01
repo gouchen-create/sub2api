@@ -151,7 +151,11 @@ func (r *reconciliationUpstreamBillRepository) ListStaging(ctx context.Context, 
 	query := `
 SELECT id, provider, upstream_request_id, occurred_at, billing_date, model, token_name,
        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_tokens_total,
-       cost_original, currency, fx_rate_to_cny, cost_cny, source
+       cost_original, currency, fx_rate_to_cny, cost_cny, source,
+       -- 孤儿宽限期的起算点必须取「入库时刻」。imported_at 是 DEFAULT now()，
+       -- 只有手工导入的历史数据才可能为空，此时退回 created_at（同一次 INSERT 写入），
+       -- 两者都空才回到 occurred_at 兜底。
+       COALESCE(imported_at, created_at, occurred_at) AS imported_at
 FROM reconciliation_upstream_bills
 WHERE match_state = 'staging' AND occurred_at >= $1 AND occurred_at < $2
 ORDER BY occurred_at, id
@@ -187,6 +191,7 @@ LIMIT $3
 			&payload.FxRateToCNY,
 			&payload.CostCNY,
 			&payload.Source,
+			&bill.ImportedAt,
 		); err != nil {
 			return nil, err
 		}

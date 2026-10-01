@@ -28,7 +28,9 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key,
+      // 保留 key 便于断言；带参数时把参数值拼在后面，这样时间插值是否真的发生也能验证
+      t: (key: string, params?: Record<string, unknown>) =>
+        params ? `${key} ${Object.values(params).join(' ')}` : key,
       locale: { value: 'zh' }
     })
   }
@@ -142,6 +144,122 @@ describe('CompanionView 上游状态优先级', () => {
     )
     // 读取失败只在配置卡片内提示，不需要整页引导
     expect(wrapper.text()).toContain('admin.companion.settings.loadFailed')
+
+    wrapper.unmount()
+  })
+
+  it('不可达时显示真实失败时间，而不是页面刷新时间', async () => {
+    const failedAt = '2026-10-01T04:14:59.459Z'
+    api.getStatus.mockResolvedValue(
+      status({
+        healthy: false,
+        detail: 'A6 rejected the configured credentials (upstream 401/403)',
+        last_error_at: failedAt
+      })
+    )
+    api.getSettings.mockResolvedValue(settings())
+
+    const wrapper = await mountView()
+
+    const stamp = wrapper.get('[data-testid="companion-last-error-at"]')
+    expect(stamp.text()).toContain('admin.companion.status.lastErrorAt')
+    // 插值出来的必须是数据库里那个真实失败时刻
+    expect(stamp.text()).toContain(new Date(failedAt).toLocaleTimeString())
+    // 故障场景下不再拿「更新于」（页面刷新时间）冒充失败时间
+    expect(wrapper.text()).not.toContain('admin.companion.updatedAt')
+
+    wrapper.unmount()
+  })
+
+  it('已连接时不展示失败时间，回到「更新于」', async () => {
+    api.getStatus.mockResolvedValue(status({ last_error_at: '2026-10-01T04:14:59.459Z' }))
+    api.getSettings.mockResolvedValue(settings())
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="companion-last-error-at"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('admin.companion.updatedAt')
+
+    wrapper.unmount()
+  })
+
+  it('不可达但没有失败时间戳时回落到「更新于」，不显示空时间', async () => {
+    api.getStatus.mockResolvedValue(status({ healthy: false, detail: 'dial tcp: i/o timeout' }))
+    api.getSettings.mockResolvedValue(settings())
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="companion-last-error-at"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('admin.companion.updatedAt')
+
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 采集积压必须可见。
+ *
+ * 单轮采集有上限（CollectBatchSize），被塞满时游标只推进到本批最后一行，
+ * 剩余调用要等下一轮才补上；这期间看板上的收入是偏低的。
+ * 积压信号藏在日志里等于没有——它必须出现在状态卡片上。
+ */
+describe('CompanionView 采集积压提示', () => {
+  beforeEach(() => {
+    Object.values(api).forEach((fn) => fn.mockReset())
+    api.getSummary.mockResolvedValue({ currency: 'CNY', fx_usd_cny: '6.71', fx_source: 'page' })
+    api.getTimeseries.mockResolvedValue({ points: [], bucket: '1小时' })
+    api.getRequests.mockResolvedValue({ items: [], total: 0 })
+    api.getAccountRules.mockResolvedValue({ items: [], unconfigured_accounts: 0 })
+    api.getSettings.mockResolvedValue(settings())
+  })
+
+  it('本轮被上限截断时显示积压行数', async () => {
+    api.getStatus.mockResolvedValue(
+      status({ usage_batch_truncated: true, usage_backlog: 39975, usage_last_batch_size: 5000 })
+    )
+
+    const wrapper = await mountView()
+
+    const backlog = wrapper.get('[data-testid="companion-usage-backlog"]')
+    expect(backlog.text()).toContain('admin.companion.status.usageBacklog')
+    // 插值出来的必须是真实的待采集行数
+    expect(backlog.text()).toContain('39975')
+
+    wrapper.unmount()
+  })
+
+  it('被截断但探针数不出行数时用不含数字的兜底文案', async () => {
+    api.getStatus.mockResolvedValue(status({ usage_batch_truncated: true, usage_backlog: 0 }))
+
+    const wrapper = await mountView()
+
+    const backlog = wrapper.get('[data-testid="companion-usage-backlog"]')
+    expect(backlog.text()).toBe('admin.companion.status.usageTruncated')
+
+    wrapper.unmount()
+  })
+
+  it('没有被截断时不显示积压提示，避免制造无意义的焦虑', async () => {
+    api.getStatus.mockResolvedValue(
+      status({ usage_batch_truncated: false, usage_backlog: 0, usage_cursor_at: '2026-10-01T04:14:59.459Z' })
+    )
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="companion-usage-backlog"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('后端还没返回新字段（旧版本）时不显示、也不报错', async () => {
+    api.getStatus.mockResolvedValue(status())
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="companion-usage-backlog"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="companion-status-badge"]').text()).toBe(
+      'admin.companion.status.healthy'
+    )
 
     wrapper.unmount()
   })

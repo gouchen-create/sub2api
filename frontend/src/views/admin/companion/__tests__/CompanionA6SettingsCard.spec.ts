@@ -151,6 +151,37 @@ describe('CompanionA6SettingsCard', () => {
     )
   })
 
+  it('用户标识给出格式提示，非数字只警告不拦截保存', async () => {
+    const wrapper = mountCard(baseSettings({ a6_user_id: '1233' }))
+
+    expect(wrapper.get('[data-testid="a6-settings-user-id-hint"]').text()).toBe(
+      'admin.companion.settings.userIdHint'
+    )
+
+    // 线上真实踩过的坑：把中文分组名填进「A6 用户标识」，A6 只回一个笼统的 401
+    await wrapper.get('[data-testid="a6-settings-user-id"]').setValue('codex-官方0.1折')
+
+    expect(wrapper.get('[data-testid="a6-settings-user-id-hint"]').text()).toBe(
+      'admin.companion.settings.userIdWarning'
+    )
+
+    // 只提示不阻塞：填错的值仍然要能保存回去，否则连修好它的路径都被挡住了
+    await wrapper.get('[data-testid="a6-settings-save"]').trigger('click')
+    expect(savedPayload(wrapper)).toEqual({ a6_user_id: 'codex-官方0.1折' })
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('用户标识为纯数字时不出现警告', () => {
+    const wrapper = mountCard(baseSettings({ a6_user_id: '1233' }))
+
+    expect(wrapper.get('[data-testid="a6-settings-user-id"]').attributes('placeholder')).toBe(
+      'admin.companion.settings.userIdPlaceholder'
+    )
+    expect(wrapper.get('[data-testid="a6-settings-user-id-hint"]').text()).toBe(
+      'admin.companion.settings.userIdHint'
+    )
+  })
+
   it('保存中禁用全部操作', () => {
     const wrapper = mount(CompanionA6SettingsCard, {
       props: { settings: baseSettings(), saving: true }

@@ -118,26 +118,46 @@ func (s *ReconciliationLedgerService) TimeSeries(ctx context.Context, from, to t
 	}, nil
 }
 
+// NormalizeReconciliationStatus 把明细页的状态筛选规范化成受支持的取值。
+//
+// 未知取值按 all 处理：前端下拉框是唯一调用方，未知值意味着契约变更而非用户输入错误，
+// 退回全量比报错更有用。导出它是为了让接口层能回显**归一化之后的实际生效值**——
+// 否则会出现「传 bogus、实际返回全量、响应里却写着 bogus」这种自相矛盾的契约。
+func NormalizeReconciliationStatus(status string) string {
+	switch status {
+	case "matched", "unmatched", "upstream_unmatched":
+		return status
+	default:
+		return "all"
+	}
+}
+
+// NormalizeReconciliationPageSize 把明细分页大小收敛到 [1, ReconciliationMaxPageSize]。
+//
+// 小于 1（含缺省 0）取默认值，大于上限取上限。导出理由同上：接口层要用**同一个函数**
+// 算出真正生效的页大小并原样回显，避免出现「请求 page_size=200、响应回显 50、
+// 实际按 100 取数」这种三处口径不一致的旧账。
+func NormalizeReconciliationPageSize(pageSize int) int {
+	if pageSize < 1 {
+		return ReconciliationDefaultPageSize
+	}
+	if pageSize > ReconciliationMaxPageSize {
+		return ReconciliationMaxPageSize
+	}
+	return pageSize
+}
+
 // Requests 返回明细页。
 //
-// status 只接受 all / matched / unmatched / upstream_unmatched，未知取值按 all 处理：
-// 前端下拉框是唯一调用方，未知值意味着契约变更而非用户输入错误，退回全量比报错更有用。
+// status 只接受 all / matched / unmatched / upstream_unmatched，未知取值按 all 处理；
+// pageSize 收敛到 [1, 100]。调用方若要把生效值回显给前端，请使用上面两个归一化函数，
+// 不要自己再写一份判断。
 func (s *ReconciliationLedgerService) Requests(ctx context.Context, from, to time.Time, status string, page, pageSize int) ([]ReconciliationLedgerRow, int64, error) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 {
-		pageSize = ReconciliationDefaultPageSize
-	}
-	if pageSize > ReconciliationMaxPageSize {
-		pageSize = ReconciliationMaxPageSize
-	}
-
-	switch status {
-	case "matched", "unmatched", "upstream_unmatched":
-	default:
-		status = "all"
-	}
+	pageSize = NormalizeReconciliationPageSize(pageSize)
+	status = NormalizeReconciliationStatus(status)
 
 	return s.ledgerRepo.Rows(ctx, from, to, status, page, pageSize)
 }
@@ -145,4 +165,12 @@ func (s *ReconciliationLedgerService) Requests(ctx context.Context, from, to tim
 // UsageCountsByAccount 返回窗口内各账号的用量摘要，供规则页合并展示。
 func (s *ReconciliationLedgerService) UsageCountsByAccount(ctx context.Context, from, to time.Time) (map[int64]ReconciliationAccountUsage, error) {
 	return s.ledgerRepo.UsageCountsByAccount(ctx, from, to)
+}
+
+// RecentUsageByAccount 返回各账号全历史最后一次调用的模型与分组，供规则页展示。
+//
+// 与 UsageCountsByAccount 的口径差异是刻意的，见文档 19：范围内统计严格按窗口，
+// 最近模型 / 最近分组读全历史最后一次调用，不受时间筛选影响。
+func (s *ReconciliationLedgerService) RecentUsageByAccount(ctx context.Context) (map[int64]ReconciliationRecentUsage, error) {
+	return s.ledgerRepo.RecentUsageByAccount(ctx)
 }

@@ -23,6 +23,33 @@ export interface CompanionStatus {
   status?: number
   /** 探测失败原因（网络错误或上游错误体摘要） */
   detail?: string
+  /**
+   * 最近一次上游采集失败的真实发生时间（毫秒精度的 RFC3339），没有失败记录时缺省。
+   *
+   * 与页面上「更新于」（页面刷新时刻）不是一回事：排查故障要看的是这个时间。
+   */
+  last_error_at?: string
+  /**
+   * 下游用量采集游标的当前位置（毫秒精度的 RFC3339）。
+   *
+   * 每次采集都会推进（无新调用时推进到 now-1min），所以它同时是「采集器还活着吗」
+   * 的判据：长时间不动说明采集协程卡住或被 leader 锁挡住。
+   */
+  usage_cursor_at?: string
+  /** 本轮采集实际取到的行数上限（配置的 CollectBatchSize） */
+  usage_last_batch_size?: number
+  /**
+   * 本轮是否被单轮上限截断。
+   *
+   * true 表示「本轮取满了上限、游标只推进到本批最后一行，剩下的要等下一轮」——
+   * 这时看板上的收入会偏低，不是数据错，而是还没采完。
+   */
+  usage_batch_truncated?: boolean
+  /**
+   * 待采集行数。被截断时由采集器顺手数出来，探针上限 10 万：
+   * 等于 100000 表示「至少还有这么多」，不是精确值。未被截断时为 0。
+   */
+  usage_backlog?: number
 }
 
 // ==================== 上游 A6 配置 ====================
@@ -249,11 +276,19 @@ export interface CompanionRequestQueryParams extends CompanionTimeWindowParams {
 /** 账号规则视图（Companion /ops/api/account-rules 的 items 元素） */
 export interface CompanionAccountRule {
   account_id: number
-  /** a6 / subarx；未配置时为空字符串 */
+  /**
+   * 上游类型。当前只有 a6 会被后端接受；历史数据里可能残留 subarx
+   * （Subarx 已于 v0.2.9 下线），所以读取侧保留宽松的 string 而不是收窄成 'a6'。
+   */
   provider: string
   /** A6 令牌名（provider 为 a6 时有值） */
   token_name: string
-  /** Subarx 倍率（provider 为 subarx 时有值） */
+  /**
+   * 历史遗留字段：Subarx 倍率。
+   *
+   * Subarx 下线后它恒为空串，但后端契约仍在返回它（文档 5.4 明确要求保留这些
+   * 字段以免破坏前端契约），所以类型上继续保留并标注语义。
+   */
   multiplier: string
   /** 规则版本号；0 表示还没有规则 */
   version: number
@@ -267,16 +302,34 @@ export interface CompanionAccountRule {
   group_id: number
   group_name: string
   group_priority: number
+  /**
+   * 该分组的真实渠道数（与主站分组页 account_count 同口径，只算未软删账号）。
+   *
+   * 不要用「本列表里该分组的行数」代替它：一行是一个账号，而账号可以同时属于多个
+   * 分组，这里只展示它优先级最高的那一个，所以行数会少算。
+   */
+  group_channel_count: number
   account_name: string
   account_platform: string
   account_status: string
   account_schedulable: boolean
-  /** 范围内的调用数 */
+  /** **范围内**的调用数（受时间筛选影响） */
   usage_count: number
+  /** **范围内**首次调用时间（受时间筛选影响） */
   first_seen: string
+  /** **范围内**最后调用时间（受时间筛选影响） */
   last_seen: string
-  /** 该账号最近使用的模型 */
-  models: string
+  /**
+   * 该账号**全历史最后一次调用**用到的模型，不受时间筛选影响。
+   *
+   * 与 usage_count / first_seen / last_seen 的口径刻意不同（文档 19）：
+   * 管理员给账号登记上游令牌名时最需要的就是这条线索，窗口不该把它抹掉。
+   */
+  recent_model: string
+  /** 全历史最后一次调用所在的分组 ID；0 表示该账号没有任何调用记录 */
+  recent_group_id: number
+  /** 全历史最后一次调用所在的分组名；分组已删除时为空字符串，此时用 recent_group_id 展示 */
+  recent_group_name: string
 }
 
 /** GET /admin/companion/account-rules 的响应 */
@@ -290,14 +343,15 @@ export interface CompanionAccountRuleList extends CompanionTimeWindowParams {
 
 /**
  * 保存账号规则的请求体。
- * provider 为 a6 时 token_name 必填；provider 为 subarx 时 multiplier 必须是正数小数。
+ *
+ * 上游类型只有 a6：Subarx 已于 v0.2.9 下线，提交 provider: 'subarx' 会被后端
+ * 直接拒绝（400 COMPANION_BAD_REQUEST），所以类型上不再开放这个取值。
+ * 省略 provider 时后端按 a6 处理。
  */
 export interface CompanionAccountRuleInput {
-  provider: 'a6' | 'subarx'
+  provider?: 'a6'
   /** A6 令牌名 */
-  token_name?: string
-  /** Subarx 倍率 */
-  multiplier?: string
+  token_name: string
   /** 省略时上游按启用处理 */
   enabled?: boolean
 }

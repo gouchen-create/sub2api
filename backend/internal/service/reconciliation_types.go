@@ -165,6 +165,12 @@ type ReconciliationAccountRule struct {
 type ReconciliationUpstreamBill struct {
 	ID      int64
 	Payload ReconciliationUpstreamBillPayload
+	// ImportedAt 是这条账单**落到本站**的时刻，也是孤儿宽限期的起算点。
+	//
+	// 它跟 OccurredAt 是两个完全不同的概念：OccurredAt 是上游流水发生时间，
+	// 首次拉取 24 小时窗口时每条账单的 OccurredAt 都已经过去很久。
+	// 拿 OccurredAt 当宽限期起点会让「刚导入」的账单立刻被判成孤儿。
+	ImportedAt time.Time
 }
 
 // ReconciliationUpstreamBillPayload 是写入上游账单时需要的全部字段。
@@ -278,6 +284,11 @@ type ReconciliationAccountRuleRepository interface {
 	GetByAccountID(ctx context.Context, accountID int64) (*ReconciliationAccountRule, error)
 	Upsert(ctx context.Context, accountID int64, provider, externalKey string, multiplier *float64, enabled bool) (*ReconciliationAccountRule, error)
 	Delete(ctx context.Context, accountID int64) (int64, error)
+	// CountAccountsByGroup 返回每个分组当前关联的真实渠道（账号）数。
+	//
+	// 与主站分组页的 account_count 同口径：只算未软删账号。规则页拿它渲染
+	// 「分组 #N · M 个渠道」——那个数字必须是分组的真实渠道数，不是本表格的行数。
+	CountAccountsByGroup(ctx context.Context) (map[int64]int64, error)
 }
 
 // ReconciliationSyncStateRepository 同步状态的读写。
@@ -298,10 +309,37 @@ type ReconciliationUsageFact struct {
 	CreatedAt  time.Time
 }
 
+// ReconciliationUsageQuery 描述一轮采集要读哪些调用。
+//
+// 时间窗口是半开区间 [From, To)。BoundaryAt / BoundaryID 组成**复合采集位置**：
+// 它表达「created_at == BoundaryAt 且 id <= BoundaryID 的行已经采集过」，
+// 读取时必须跳过这些行，而窗口里其余的行（含 created_at < BoundaryAt 的重扫带）
+// 一律照常返回。
+//
+// 复合位置的存在是为了让同一 created_at 上的大量行也能被逐批读完：
+// 只按 created_at 推进游标时，若某个时间戳上的行数超过单轮上限，
+// 下一轮会取到与上一轮完全相同的批次，游标永远不动（死循环）且后面的行永远采不到。
+// 加上 id 之后位置在 (created_at, id) 上严格单调，一定前进。
+type ReconciliationUsageQuery struct {
+	From time.Time
+	To   time.Time
+	// BoundaryAt 是已采集到的位置的时间部分。
+	BoundaryAt time.Time
+	// BoundaryID 是同一时刻上的主键水位；为 0 表示该时刻还没有任何行被排除。
+	BoundaryID int64
+	// Limit 单轮读取的行数上限；<=0 时由实现方取默认值。
+	Limit int
+}
+
 // ReconciliationUsageSource 提供待采集的下游调用。
 type ReconciliationUsageSource interface {
-	// ListUsageBetween 返回 [from, to) 内的调用，按发生时间与主键升序。
-	ListUsageBetween(ctx context.Context, from, to time.Time, limit int) ([]ReconciliationUsageFact, error)
+	// ListUsageBetween 返回窗口内尚未采集的调用，按发生时间与主键升序。
+	ListUsageBetween(ctx context.Context, query ReconciliationUsageQuery) ([]ReconciliationUsageFact, error)
+	// CountUsagePending 统计窗口内待采集的行数，最多数 limit 行。
+	//
+	// 它是给运维看的积压探针，不是采集路径的一部分：调用方只在单轮被上限截断时
+	// 才需要它，而且必须能接受「返回值 = limit 表示至少还有这么多行」的语义。
+	CountUsagePending(ctx context.Context, query ReconciliationUsageQuery, limit int64) (int64, error)
 }
 
 // ReconciliationBillQuery 描述一次上游账单拉取。
@@ -334,15 +372,30 @@ type ReconciliationLedgerRepository interface {
 	Points(ctx context.Context, from, to time.Time, bucket time.Duration) ([]ReconciliationBucketPoint, error)
 	// Rows 返回明细页；status 取 all / matched / unmatched / upstream_unmatched。
 	Rows(ctx context.Context, from, to time.Time, status string, page, pageSize int) ([]ReconciliationLedgerRow, int64, error)
-	// UsageCountsByAccount 返回窗口内各账号的调用数、首末调用时间与模型名。
+	// UsageCountsByAccount 返回窗口内各账号的调用数与首末调用时间。
 	UsageCountsByAccount(ctx context.Context, from, to time.Time) (map[int64]ReconciliationAccountUsage, error)
+	// RecentUsageByAccount 返回各账号**全历史最后一次调用**的模型与分组。
+	//
+	// 刻意不带时间参数：规则页的「最近模型 / 最近分组」是账号的身份信息，
+	// 不能被筛选窗口抹掉，否则一个最近 24 小时没跑过的账号会显示成「暂无调用记录」，
+	// 而管理员要给它登记上游令牌名时，最需要的恰恰是这条历史线索。
+	RecentUsageByAccount(ctx context.Context) (map[int64]ReconciliationRecentUsage, error)
 }
 
-// ReconciliationAccountUsage 是某个账号在窗口内的用量摘要，供规则页展示。
+// ReconciliationAccountUsage 是某个账号在**筛选窗口内**的用量摘要，供规则页展示。
+//
+// 「范围内调用」与首次/最后活动时间严格采用筛选范围，窗口外的调用不计入这里。
 type ReconciliationAccountUsage struct {
 	AccountID int64
 	Count     int64
 	FirstSeen time.Time
 	LastSeen  time.Time
-	Models    []string
+}
+
+// ReconciliationRecentUsage 是某个账号**全历史最后一次调用**的模型与分组。
+type ReconciliationRecentUsage struct {
+	AccountID int64
+	Model     string
+	GroupID   int64
+	GroupName string
 }

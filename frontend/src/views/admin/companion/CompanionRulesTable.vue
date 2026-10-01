@@ -42,8 +42,8 @@
           <div class="mt-0.5 truncate text-xs text-gray-400">
             {{
               row.group_id
-                ? t('admin.companion.rules.groupMeta', { id: row.group_id, count: groupChannelCount(row.group_id) })
-                : t('admin.companion.rules.noGroup')
+                ? t('admin.companion.rules.groupMeta', { id: row.group_id, count: groupChannelCount(row) })
+                : t('admin.companion.rules.noGroupHint')
             }}
           </div>
         </div>
@@ -76,25 +76,25 @@
       <template #cell-recentModel="{ row }">
         <span
           class="block max-w-[180px] truncate text-gray-600 dark:text-gray-300"
-          :title="row.models"
+          :title="row.recent_model"
         >
-          {{ row.models || t('admin.companion.rules.noUsage') }}
+          {{ row.recent_model || t('admin.companion.rules.noUsage') }}
         </span>
+      </template>
+
+      <template #cell-recentGroup="{ row }">
+        <div class="min-w-0 max-w-[160px]">
+          <div class="truncate text-gray-600 dark:text-gray-300" :title="row.recent_group_name">
+            {{ row.recent_group_name || (row.recent_group_id ? recentGroupDeleted(row) : t('admin.companion.rules.noUsage')) }}
+          </div>
+          <div v-if="row.recent_group_id" class="mt-0.5 truncate text-xs text-gray-400">
+            {{ t('admin.companion.rules.recentGroupMeta', { id: row.recent_group_id }) }}
+          </div>
+        </div>
       </template>
 
       <template #cell-usageCount="{ value }">
         <span class="whitespace-nowrap font-mono text-gray-700 dark:text-gray-300">{{ value || 0 }}</span>
-      </template>
-
-      <template #cell-provider="{ row }">
-        <div class="w-full min-w-[140px]">
-          <Select
-            :model-value="draftFor(row).provider"
-            :options="providerOptions"
-            :disabled="props.savingId === row.account_id || props.removingId === row.account_id"
-            @update:model-value="onProviderChange(row, $event)"
-          />
-        </div>
       </template>
 
       <template #cell-value="{ row }">
@@ -102,7 +102,7 @@
           :value="draftFor(row).value"
           type="text"
           class="input min-w-[160px]"
-          :placeholder="valuePlaceholder(draftFor(row).provider)"
+          :placeholder="t('admin.companion.rules.valuePlaceholderA6')"
           :disabled="props.savingId === row.account_id || props.removingId === row.account_id"
           @input="onValueInput(row, $event)"
         />
@@ -168,7 +168,6 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import DataTable from '@/components/common/DataTable.vue'
-import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
 import type { CompanionAccountRule } from '@/api/admin/companion'
@@ -190,7 +189,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
-  (e: 'save', payload: { accountId: number; provider: 'a6' | 'subarx'; value: string }): void
+  (e: 'save', payload: { accountId: number; value: string }): void
   (e: 'remove', accountId: number): void
 }>()
 
@@ -198,7 +197,6 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 interface RuleDraft {
-  provider: string
   value: string
   /** 用户是否手工改过；未改动的草稿会随后端刷新重新同步 */
   dirty: boolean
@@ -206,11 +204,14 @@ interface RuleDraft {
 
 const drafts = ref<Record<number, RuleDraft>>({})
 
+// 规则只有一个字段：该账号对应的 A6 令牌名。
+//
+// 上游类型选择器已经整个移除：后端 ValidateRuleInput 只接受 a6，选 Subarx 一定
+// 返回 400 COMPANION_BAD_REQUEST——那是个必然失败的按钮，留在页面上只会让人
+// 以为「配置没生效」是别的原因。Subarx 已于 v0.2.9 下线（文档 5.4）。
 function buildDraft(item: CompanionAccountRule): RuleDraft {
-  const provider = item.provider || ''
   return {
-    provider,
-    value: provider === 'a6' ? item.token_name || '' : provider === 'subarx' ? item.multiplier || '' : '',
+    value: item.token_name || '',
     dirty: false
   }
 }
@@ -236,41 +237,32 @@ function draftFor(item: CompanionAccountRule): RuleDraft {
   return drafts.value[item.account_id]
 }
 
-const groupSizes = computed(() => {
-  const sizes = new Map<number, number>()
-  for (const item of props.items) {
-    if (!item.group_id) continue
-    sizes.set(item.group_id, (sizes.get(item.group_id) || 0) + 1)
-  }
-  return sizes
-})
+// 分组的真实渠道数直接由后端给出（group_channel_count），不在前端从行数推。
+//
+// 旧实现按本表格的行数统计，那是假的——一行是一个账号，而账号可以同时属于多个分组、
+// 表格只展示它优先级最高的那一个。dev 库实测：分组 7 真实有 2 个渠道
+// （账号 #46 priority 1、#44 priority 3），页面却显示「1 个渠道」，因为 #44 的分组列
+// 被分组 #10 抢走了。数字必须来自后端按 account_groups 的真实统计，不能从行数推。
+function groupChannelCount(row: CompanionAccountRule): number {
+  return row.group_channel_count || 0
+}
 
-function groupChannelCount(groupId: number): number {
-  return groupSizes.value.get(groupId) || 0
+// 「最近分组」取该账号全历史最后一次调用所在的分组。分组可能已被删除，
+// 那时后端只回 group_id（分组名为空串），这里明确写出来而不是显示成空白。
+function recentGroupDeleted(row: CompanionAccountRule): string {
+  return t('admin.companion.rules.recentGroupDeleted', { id: row.recent_group_id })
 }
 
 const columns = computed<Column[]>(() => [
   { key: 'group', label: t('admin.companion.rules.columns.group') },
   { key: 'account', label: t('admin.companion.rules.columns.account') },
   { key: 'recentModel', label: t('admin.companion.rules.columns.recentModel') },
+  { key: 'recentGroup', label: t('admin.companion.rules.columns.recentGroup') },
   { key: 'usageCount', label: t('admin.companion.rules.columns.usageCount') },
-  { key: 'provider', label: t('admin.companion.rules.columns.provider') },
   { key: 'value', label: t('admin.companion.rules.columns.value') },
   { key: 'state', label: t('admin.companion.rules.columns.state') },
   { key: 'actions', label: t('admin.companion.rules.columns.actions') }
 ])
-
-const providerOptions = computed(() => [
-  { value: '', label: t('admin.companion.rules.providerPlaceholder') },
-  { value: 'a6', label: t('admin.companion.rules.providerA6') },
-  { value: 'subarx', label: t('admin.companion.rules.providerSubarx') }
-])
-
-function valuePlaceholder(provider: string): string {
-  if (provider === 'a6') return t('admin.companion.rules.valuePlaceholderA6')
-  if (provider === 'subarx') return t('admin.companion.rules.valuePlaceholderSubarx')
-  return t('admin.companion.rules.valuePlaceholderEmpty')
-}
 
 function onValueInput(item: CompanionAccountRule, event: Event) {
   const draft = draftFor(item)
@@ -278,23 +270,8 @@ function onValueInput(item: CompanionAccountRule, event: Event) {
   draft.dirty = true
 }
 
-function onProviderChange(item: CompanionAccountRule, value: string | number | boolean | null) {
-  const draft = draftFor(item)
-  const provider = String(value ?? '')
-  if (draft.provider !== provider) {
-    // 切换上游类型后原参数不再适用，清空让用户重新填写
-    draft.value = ''
-  }
-  draft.provider = provider
-  draft.dirty = true
-}
-
 function onSave(item: CompanionAccountRule) {
   const draft = draftFor(item)
-  if (!draft.provider) {
-    appStore.showError(t('admin.companion.rules.providerRequired'))
-    return
-  }
   const value = draft.value.trim()
   if (!value) {
     appStore.showError(t('admin.companion.rules.valueRequired'))
@@ -302,6 +279,6 @@ function onSave(item: CompanionAccountRule) {
   }
   draft.value = value
   draft.dirty = false
-  emit('save', { accountId: item.account_id, provider: draft.provider as 'a6' | 'subarx', value })
+  emit('save', { accountId: item.account_id, value })
 }
 </script>

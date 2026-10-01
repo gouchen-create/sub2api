@@ -90,13 +90,18 @@ var companionTimeseriesPointContractKeys = []string{
 	"matched", "unmatched", "upstream_unmatched", "record_total",
 }
 
-// companionAccountRuleContractKeys 是 CompanionAccountRule 声明的全部字段（21 个）。
+// companionAccountRuleContractKeys 是 CompanionAccountRule 声明的全部字段（24 个）。
+//
+// models 已拆成 recent_model / recent_group_id / recent_group_name：
+// 契约只声明一个「最近」概念，由全历史最后一次调用决定（文档 19），
+// 而不是窗口内模型名的并集——后者既不是「最近」，也会随筛选条件漂移。
 var companionAccountRuleContractKeys = []string{
 	"account_id", "provider", "token_name", "multiplier", "version", "enabled",
 	"created_at", "updated_at", "configured", "current",
-	"group_id", "group_name", "group_priority",
+	"group_id", "group_name", "group_priority", "group_channel_count",
 	"account_name", "account_platform", "account_status", "account_schedulable",
-	"usage_count", "first_seen", "last_seen", "models",
+	"usage_count", "first_seen", "last_seen",
+	"recent_model", "recent_group_id", "recent_group_name",
 }
 
 // companionBackfillStatusContractKeys 是 CompanionA6BackfillStatus 的字段（7 个）。
@@ -223,6 +228,8 @@ type companionLedgerStub struct {
 	rows    []service.ReconciliationLedgerRow
 	total   int64
 	usage   map[int64]service.ReconciliationAccountUsage
+	// recent 是全历史最后一次调用的模型与分组，与窗口无关。
+	recent map[int64]service.ReconciliationRecentUsage
 
 	lastStatus   string
 	lastPage     int
@@ -248,6 +255,10 @@ func (s *companionLedgerStub) UsageCountsByAccount(_ context.Context, _, _ time.
 	return s.usage, nil
 }
 
+func (s *companionLedgerStub) RecentUsageByAccount(_ context.Context) (map[int64]service.ReconciliationRecentUsage, error) {
+	return s.recent, nil
+}
+
 // companionRuleStub 桩掉账号规则仓库。
 type companionRuleStub struct {
 	service.ReconciliationAccountRuleRepository
@@ -255,6 +266,15 @@ type companionRuleStub struct {
 	rules   []service.ReconciliationAccountRule
 	saved   *service.ReconciliationAccountRule
 	deleted int64
+	// groupChannelCounts 每个分组的真实渠道数（与行数无关）。
+	groupChannelCounts map[int64]int64
+}
+
+func (s *companionRuleStub) CountAccountsByGroup(_ context.Context) (map[int64]int64, error) {
+	if s.groupChannelCounts == nil {
+		return map[int64]int64{}, nil
+	}
+	return s.groupChannelCounts, nil
 }
 
 func (s *companionRuleStub) List(_ context.Context) ([]service.ReconciliationAccountRule, error) {
@@ -412,8 +432,12 @@ type companionUsageSourceStub struct {
 	service.ReconciliationUsageSource
 }
 
-func (s *companionUsageSourceStub) ListUsageBetween(_ context.Context, _, _ time.Time, _ int) ([]service.ReconciliationUsageFact, error) {
+func (s *companionUsageSourceStub) ListUsageBetween(_ context.Context, _ service.ReconciliationUsageQuery) ([]service.ReconciliationUsageFact, error) {
 	return nil, nil
+}
+
+func (s *companionUsageSourceStub) CountUsagePending(_ context.Context, _ service.ReconciliationUsageQuery, _ int64) (int64, error) {
+	return 0, nil
 }
 
 // companionBillSourceStub 桩掉上游账单来源。
@@ -543,9 +567,15 @@ func newCompanionHarness(options ...companionHarnessOption) *companionHarness {
 			1: {
 				AccountID: 1, Count: 5,
 				FirstSeen: now.Add(-time.Hour), LastSeen: now,
-				Models: []string{"claude-3-5-sonnet", "gpt-4o"},
 			},
 			2: {AccountID: 2, Count: 2, FirstSeen: now.Add(-2 * time.Hour), LastSeen: now.Add(-time.Minute)},
+		},
+		// 最近模型 / 最近分组来自全历史最后一次调用，与窗口无关。
+		// 账号 2 的最后一次调用落在已删除的分组上：分组名退化成空串，
+		// 但 group_id 与模型名必须保留下来（线索不能整条丢掉）。
+		recent: map[int64]service.ReconciliationRecentUsage{
+			1: {AccountID: 1, Model: "claude-3-5-sonnet", GroupID: 2, GroupName: "默认分组"},
+			2: {AccountID: 2, Model: "gpt-4o", GroupID: 99, GroupName: ""},
 		},
 	}
 
@@ -559,6 +589,9 @@ func newCompanionHarness(options ...companionHarnessOption) *companionHarness {
 			},
 		},
 		deleted: 1,
+		// 分组 2 在本表里只有账号 1 一行，但它真实挂了 3 个渠道：
+		// 页面必须显示 3，而不是按行数数出来的 1。
+		groupChannelCounts: map[int64]int64{2: 3},
 	}
 
 	state := &companionStateStub{}
@@ -877,6 +910,40 @@ func TestCompanionStatusUnhealthyCarriesDetail(t *testing.T) {
 	detail := companionJSONString(t, data, "detail")
 	assert.NotEmpty(t, strings.TrimSpace(detail), "不健康时 detail 必须非空")
 	assert.Contains(t, detail, "A6 上游返回 401")
+}
+
+// TestCompanionStatusCarriesRealFailureTime 不健康时给出真实失败时刻。
+//
+// 页面上的「更新于」是刷新时刻，会把「上游 11:58 挂了、我 12:03 打开页面」渲染成
+// 「更新于 12:03:00」，故障到底什么时候开始的完全看不出来。失败时刻必须由后端给。
+func TestCompanionStatusCarriesRealFailureTime(t *testing.T) {
+	harness := newCompanionHarness()
+	harness.state.set("a6_last_sync_error", "A6 上游返回 401")
+	harness.state.set("a6_last_sync_error_at", "2026-10-01T04:14:59.459253264Z")
+
+	_, envelope := harness.do(t, http.MethodGet, "/status", "")
+	data := companionDecodeObject(t, envelope.Data)
+
+	assert.False(t, companionJSONBool(t, data, "healthy"))
+	// 必须是毫秒精度：RFC3339Nano 的 9 位小数只是靠浏览器宽松截断才能被 new Date() 解析，
+	// 那是实现细节不是契约，交给前端的字段一律钉死在 3 位。
+	assert.Equal(t, "2026-10-01T04:14:59.459Z", companionJSONString(t, data, "last_error_at"))
+}
+
+// TestCompanionStatusHealthyOmitsFailureTime 已连接时不带失败时间。
+//
+// 成功一轮只清 a6_last_sync_error，并不清 a6_last_sync_error_at，所以这个时间戳单独看
+// 有可能已经过期；健康时绝不能把它当成当前状态展示给管理员。
+func TestCompanionStatusHealthyOmitsFailureTime(t *testing.T) {
+	harness := newCompanionHarness()
+	harness.state.set("a6_last_sync_error_at", "2026-10-01T04:14:59.459253264Z")
+
+	_, envelope := harness.do(t, http.MethodGet, "/status", "")
+	data := companionDecodeObject(t, envelope.Data)
+
+	require.True(t, companionJSONBool(t, data, "healthy"), "没有失败记录时必须健康：%v", data)
+	_, present := data["last_error_at"]
+	assert.False(t, present, "健康时不该给出可能已经过期的失败时间")
 }
 
 // TestCompanionStatusWithoutBillSourceIsDegradedButEnabled 未配置上游凭据时仍须 enabled = true。
@@ -1308,14 +1375,39 @@ func TestCompanionRequestsPaginationSemantics(t *testing.T) {
 		assert.Equal(t, 10, harness.ledger.lastPageSize)
 	})
 
-	t.Run("unknown_status_falls_back_to_all", func(t *testing.T) {
+	t.Run("unknown_status_falls_back_to_all_and_echoes_effective_value", func(t *testing.T) {
 		harness := newCompanionHarness()
 
 		_, envelope := harness.do(t, http.MethodGet, "/requests?status=whatever", "")
 		data := companionDecodeObject(t, envelope.Data)
 
 		assert.Equal(t, "all", harness.ledger.lastStatus, "未知 status 必须按 all 处理而不是报错")
-		assert.Equal(t, "whatever", companionJSONString(t, data, "status"))
+		assert.Equal(t, "all", companionJSONString(t, data, "status"),
+			"回显必须是实际生效的 all，不能把请求里的 whatever 原样写回")
+	})
+
+	t.Run("oversized_page_size_is_clamped_and_echoed_as_effective_value", func(t *testing.T) {
+		harness := newCompanionHarness()
+
+		_, envelope := harness.do(t, http.MethodGet, "/requests?page_size=200", "")
+		data := companionDecodeObject(t, envelope.Data)
+
+		assert.Equal(t, 100, harness.ledger.lastPageSize, "超过上限的 page_size 必须收敛到 100")
+		assert.Equal(t, float64(100), companionJSONNumber(t, data, "page_size"),
+			"回显的 page_size 必须与实际取数一致：旧实现回显 50、实际按 100 取，前端分页控件因此对不上")
+		// total = 51：按生效的 100 算只有 1 页；旧实现按 50 算会给出 2 页。
+		assert.Equal(t, float64(1), companionJSONNumber(t, data, "total_pages"),
+			"total_pages 必须按生效的 page_size 计算")
+	})
+
+	t.Run("zero_page_size_falls_back_to_default_and_echoes_it", func(t *testing.T) {
+		harness := newCompanionHarness()
+
+		_, envelope := harness.do(t, http.MethodGet, "/requests?page_size=0", "")
+		data := companionDecodeObject(t, envelope.Data)
+
+		assert.Equal(t, 50, harness.ledger.lastPageSize)
+		assert.Equal(t, float64(50), companionJSONNumber(t, data, "page_size"))
 	})
 
 	t.Run("pagination_fields_are_numbers", func(t *testing.T) {
@@ -1464,7 +1556,7 @@ func TestCompanionAccountRulesZeroAccountsIsEmptyArray(t *testing.T) {
 	companionRequireRFC3339(t, companionJSONString(t, data, "to"), "to")
 }
 
-// TestCompanionAccountRulesFieldTypes multiplier/version/models/usage_count 的类型必须正确。
+// TestCompanionAccountRulesFieldTypes multiplier/version/usage_count/recent_* 的类型必须正确。
 func TestCompanionAccountRulesFieldTypes(t *testing.T) {
 	harness := newCompanionHarness()
 
@@ -1488,11 +1580,14 @@ func TestCompanionAccountRulesFieldTypes(t *testing.T) {
 	assert.Equal(t, float64(3), companionJSONNumber(t, configured, "version"))
 	// usage_count 是数字。
 	assert.Equal(t, float64(5), companionJSONNumber(t, configured, "usage_count"))
-	// models 是逗号连接的字符串，不是数组。
-	models := companionJSONString(t, configured, "models")
-	assert.Equal(t, "claude-3-5-sonnet, gpt-4o", models)
-	_, modelsIsArray := configured["models"].([]any)
-	assert.False(t, modelsIsArray, "models 必须是逗号连接的字符串而不是数组")
+
+	// 最近模型是**单个**模型名（全历史最后一次调用），不是窗口内模型名的并集。
+	assert.Equal(t, "claude-3-5-sonnet", companionJSONString(t, configured, "recent_model"))
+	_, recentModelIsArray := configured["recent_model"].([]any)
+	assert.False(t, recentModelIsArray, "recent_model 必须是单个字符串而不是数组")
+	// 最近分组：id 是数字、名字是字符串。
+	assert.Equal(t, float64(2), companionJSONNumber(t, configured, "recent_group_id"))
+	assert.Equal(t, "默认分组", companionJSONString(t, configured, "recent_group_name"))
 
 	// 布尔字段。
 	assert.True(t, companionJSONBool(t, configured, "configured"))
@@ -1504,6 +1599,9 @@ func TestCompanionAccountRulesFieldTypes(t *testing.T) {
 	assert.Equal(t, float64(2), companionJSONNumber(t, configured, "group_id"))
 	assert.Equal(t, "默认分组", companionJSONString(t, configured, "group_name"))
 	companionJSONNumber(t, configured, "group_priority")
+	// group_channel_count 是分组的真实渠道数（3），不是本列表里该分组的行数（1）——
+	// 行数会被「账号只展示优先级最高的那个分组」压小，数字必须来自真实统计。
+	assert.Equal(t, float64(3), companionJSONNumber(t, configured, "group_channel_count"))
 	assert.Equal(t, "主账号", companionJSONString(t, configured, "account_name"))
 	assert.Equal(t, "anthropic", companionJSONString(t, configured, "account_platform"))
 	assert.Equal(t, "active", companionJSONString(t, configured, "account_status"))
@@ -1520,6 +1618,7 @@ func TestCompanionAccountRulesFieldTypes(t *testing.T) {
 func TestCompanionAccountRulesUnconfiguredAccountZeroValues(t *testing.T) {
 	harness := newCompanionHarness()
 	harness.ledger.usage = nil
+	harness.ledger.recent = nil
 
 	_, envelope := harness.do(t, http.MethodGet, "/account-rules", "")
 	data := companionDecodeObject(t, envelope.Data)
@@ -1535,12 +1634,50 @@ func TestCompanionAccountRulesUnconfiguredAccountZeroValues(t *testing.T) {
 	assert.Equal(t, false, companionJSONBool(t, row, "configured"))
 	assert.Equal(t, false, companionJSONBool(t, row, "enabled"))
 	assert.Equal(t, false, companionJSONBool(t, row, "current"), "status 非 active 时 current 必须为 false")
-	assert.Equal(t, "", companionJSONString(t, row, "models"))
+	assert.Equal(t, "", companionJSONString(t, row, "recent_model"))
+	assert.Equal(t, float64(0), companionJSONNumber(t, row, "recent_group_id"))
+	assert.Equal(t, "", companionJSONString(t, row, "recent_group_name"))
 	assert.Equal(t, "", companionJSONString(t, row, "first_seen"), "无数据时 first_seen 必须是空字符串")
 	assert.Equal(t, "", companionJSONString(t, row, "last_seen"), "无数据时 last_seen 必须是空字符串")
 	assert.Equal(t, "", companionJSONString(t, row, "created_at"))
 	assert.Equal(t, "", companionJSONString(t, row, "updated_at"))
 	assert.Equal(t, float64(0), companionJSONNumber(t, row, "usage_count"))
+	// 不属于任何分组：group_id 为 0，真实渠道数也必须是 0，绝不能回落到全局某个分组的数
+	assert.Equal(t, float64(0), companionJSONNumber(t, row, "group_id"))
+	assert.Equal(t, float64(0), companionJSONNumber(t, row, "group_channel_count"))
+}
+
+// TestCompanionAccountRulesRecentUsageIgnoresWindow 是文档 19 的回归测试。
+//
+// 「最近模型 / 最近分组」读该账号**全历史最后一次调用**，不受筛选窗口影响；
+// 同时「范围内调用」必须继续严格按窗口统计——同一次响应里两种口径并存，
+// 先前实现把窗口内的模型名并集塞进 models，等于把「最近模型」降级成「窗口内模型」。
+func TestCompanionAccountRulesRecentUsageIgnoresWindow(t *testing.T) {
+	harness := newCompanionHarness()
+	// 窗口内一条调用都没有，但两个账号全历史都跑过。
+	harness.ledger.usage = nil
+
+	_, envelope := harness.do(t, http.MethodGet, "/account-rules?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z", "")
+	data := companionDecodeObject(t, envelope.Data)
+	items := companionJSONArray(t, data, "items")
+	require.Len(t, items, 2)
+
+	first := items[0].(map[string]any)
+	// 最近模型 / 最近分组跨窗口保留。
+	assert.Equal(t, "claude-3-5-sonnet", companionJSONString(t, first, "recent_model"))
+	assert.Equal(t, float64(2), companionJSONNumber(t, first, "recent_group_id"))
+	assert.Equal(t, "默认分组", companionJSONString(t, first, "recent_group_name"))
+	// 范围内调用与首末活动时间仍然是窗口口径：窗口内没有调用就必须是 0 / 空。
+	assert.Equal(t, float64(0), companionJSONNumber(t, first, "usage_count"),
+		"范围内调用必须严格按窗口统计，不能被最近调用信息带偏")
+	assert.Equal(t, "", companionJSONString(t, first, "first_seen"))
+	assert.Equal(t, "", companionJSONString(t, first, "last_seen"))
+
+	// 最近一次调用所在分组已被删除（分组名为空串）时，模型名与 group_id 仍要保留。
+	second := items[1].(map[string]any)
+	assert.Equal(t, "gpt-4o", companionJSONString(t, second, "recent_model"))
+	assert.Equal(t, float64(99), companionJSONNumber(t, second, "recent_group_id"))
+	assert.Equal(t, "", companionJSONString(t, second, "recent_group_name"))
 }
 
 // ==================== 6. 未知查询参数（前端自动注入 timezone） ====================
@@ -1771,7 +1908,9 @@ func TestCompanionUpsertAccountRuleResponseContract(t *testing.T) {
 	assert.False(t, companionJSONBool(t, rule, "current"))
 	companionJSONBool(t, rule, "account_schedulable")
 	assert.Equal(t, float64(0), companionJSONNumber(t, rule, "usage_count"))
-	assert.Equal(t, "", companionJSONString(t, rule, "models"))
+	assert.Equal(t, "", companionJSONString(t, rule, "recent_model"))
+	assert.Equal(t, float64(0), companionJSONNumber(t, rule, "recent_group_id"))
+	assert.Equal(t, "", companionJSONString(t, rule, "recent_group_name"))
 }
 
 // TestCompanionDeleteAccountRuleResponseContract 删除规则的响应结构。
