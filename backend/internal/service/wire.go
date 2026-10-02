@@ -869,6 +869,10 @@ var ProviderSet = wire.NewSet(
 	// 上游成本取数：按上游请求 ID 反查 A6 账单，把真实扣费写回使用记录。
 	ProvideUpstreamCostCollector,
 	ProvideProviderPricingService,
+	// 盈亏口径：内部人员的收入不计入盈亏（余额由管理员手工调整、并非真实收款），
+	// 但其上游成本照算。名单由 UsageProfitExclusionService 持有并带 30 秒缓存。
+	NewUsageProfitExclusionService,
+	wire.Bind(new(ProfitExclusionProvider), new(*UsageProfitExclusionService)),
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,

@@ -715,6 +715,11 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 页面上那一列成本——成本是空的时候，人来这里找原因。
 		usage.GET("/upstream-cost/settings", h.Admin.UpstreamCostSettings.Settings)
 		usage.PUT("/upstream-cost/settings", h.Admin.UpstreamCostSettings.UpdateSettings)
+		// 盈亏排除名单：内部人员的收入不计入盈亏，但其上游成本照算。
+		// 面板上它和上面那份凭据挨着放，但接口分开——凭据保存失败不该让
+		// 名单也跟着不生效。
+		usage.GET("/profit-exclusion", h.Admin.UsageProfitExclusion.Settings)
+		usage.PUT("/profit-exclusion", h.Admin.UsageProfitExclusion.UpdateSettings)
 	}
 }
 

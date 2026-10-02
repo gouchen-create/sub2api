@@ -298,6 +298,16 @@ type UsageLogFilters struct {
 	EndTime               *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
+	// ProfitExcludedUserIDs 是「不计入盈亏」的用户名单（内部人员）。
+	//
+	// 语义刻意只作用于**收入**（actual_cost），不作用于**成本**（upstream_cost_original）：
+	// 内部人员的余额由管理员手工调整、并没有真实付款，所以他们的「收入」是假的；
+	// 但他们消耗掉的上游额度是真金白银花出去的，成本必须照实计入。因此这里做的是
+	// 「收入打折、成本照算」，而不是把这些人整行排除——后者会把真实成本一起抹掉，
+	// 让毛利虚高。毛利由 actual_cost - upstream_cost 后端算好，本字段只管收入那一侧。
+	//
+	// 放在结构体末尾是为了不破坏任何按位置初始化的既有字面量。
+	ProfitExcludedUserIDs []int64
 }
 
 // UsageStats represents usage statistics

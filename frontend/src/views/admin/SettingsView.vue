@@ -8913,6 +8913,10 @@
            的基础设施；放在使用记录页反而会被当成日常操作。 -->
       <div v-show="activeTab === 'upstreamCost'" class="space-y-6">
         <UpstreamCostSettingsPanel />
+        <!-- 盈亏排除名单：内部人员收入不计入盈亏、成本照算。
+             与上面那张卡分开，是因为「保存凭据失败」和「保存名单失败」
+             要各自独立，不能互相牵连。 -->
+        <ProfitExclusionPanel />
       </div>
 
       <div v-show="activeTab === 'intelligenceCheck'" class="space-y-6">
@@ -9353,6 +9357,7 @@ import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import UpstreamCostSettingsPanel from "@/components/admin/usage/UpstreamCostSettingsPanel.vue";
+import ProfitExclusionPanel from "@/components/admin/usage/ProfitExclusionPanel.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,

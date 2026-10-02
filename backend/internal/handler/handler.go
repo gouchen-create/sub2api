@@ -30,7 +30,11 @@ type AdminHandlers struct {
 	Usage            *admin.UsageHandler
 	// UpstreamCostSettings 管的是「后台按请求 ID 反查上游真实成本」用的 A6 凭据。
 	// 它和使用记录页面是一体的：成本列为空时，答案就在这个 handler 管的那份配置里。
-	UpstreamCostSettings   *admin.UpstreamCostSettingsHandler
+	UpstreamCostSettings *admin.UpstreamCostSettingsHandler
+	// UsageProfitExclusion 管的是「谁的收入不计入盈亏」这份名单。
+	// 与 UpstreamCostSettings 同属使用记录页的经营口径，但两者的失败模式不同，
+	// 因此各自一个 handler、各自一个接口，保存时互不牵连。
+	UsageProfitExclusion   *admin.UsageProfitExclusionHandler
 	UserAttribute          *admin.UserAttributeHandler
 	ErrorPassthrough       *admin.ErrorPassthroughHandler
 	TLSFingerprintProfile  *admin.TLSFingerprintProfileHandler

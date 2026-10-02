@@ -695,11 +695,26 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		args = append(args, *filters.EndTime)
 	}
 
+	// 盈亏排除名单：只摘掉这些用户的**收入**，成本照算。
+	//
+	// 不能写进 WHERE——那会把整行（含 upstream_cost_original）一起滤掉，
+	// 真实成本凭空消失、毛利虚高。也不能在 scoped 这个 CTE 里滤，理由相同：
+	// CTE 同时喂养 actual_cost 与 upstream_cost 两个聚合。正确位置是外层
+	// 只给 actual_cost 加 FILTER，所以还要把 user_id 一路带出 CTE。
+	actualCostExpr := "COALESCE(SUM(actual_cost), 0) AS actual_cost"
+	if len(filters.ProfitExcludedUserIDs) > 0 {
+		actualCostExpr = fmt.Sprintf(
+			"COALESCE(SUM(actual_cost) FILTER (WHERE user_id <> ALL($%d::bigint[])), 0) AS actual_cost",
+			len(args)+1)
+		args = append(args, pq.Array(filters.ProfitExcludedUserIDs))
+	}
+
 	query := fmt.Sprintf(`
 		WITH scoped AS (
 			SELECT
 				COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown') AS inbound_endpoint,
 				COALESCE(NULLIF(TRIM(upstream_endpoint), ''), 'unknown') AS upstream_endpoint,
+				user_id,
 				input_tokens,
 				output_tokens,
 				cache_creation_tokens,
@@ -728,7 +743,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 			COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
 			COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
 			COALESCE(SUM(total_cost), 0) AS cost,
-			COALESCE(SUM(actual_cost), 0) AS actual_cost,
+			%s,
 			COALESCE(SUM(account_cost), 0) AS account_cost,
 			COALESCE(SUM(upstream_cost_original), 0) AS upstream_cost,
 			COUNT(*) FILTER (WHERE upstream_cost_pending) AS upstream_cost_missing,
@@ -740,7 +755,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 			(upstream_endpoint),
 			(inbound_endpoint, upstream_endpoint)
 		)
-	`, buildWhere(conditions))
+	`, buildWhere(conditions), actualCostExpr)
 
 	stats := &UsageStats{}
 	var totalAccountCost float64

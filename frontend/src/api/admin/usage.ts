@@ -258,6 +258,55 @@ export async function updateUpstreamCostSettings(
   return data
 }
 
+/**
+ * 盈亏排除名单里的一个成员。
+ *
+ * email / username 为空**不代表这条记录无效**：用户可能已被删除或改名。
+ * 界面据此显示成「用户 #id」而不是把它隐藏掉——隐藏会让面板看到的名单
+ * 比后端实际生效的名单短，管理员将无法解释「为什么统计口径和界面对不上」。
+ */
+export interface ProfitExcludedUser {
+  id: number
+  email: string
+  username: string
+}
+
+/**
+ * 不计入盈亏的用户名单。
+ *
+ * 语义：名单里的用户，其**收入**不计入盈亏统计，但其**上游成本**仍然计入。
+ * 内部人员的余额由管理员手工调整、并没有真实付款，所以收入是假的；
+ * 可他们消耗掉的上游额度是真花钱，成本必须照实算。
+ */
+export interface UsageProfitExclusion {
+  /** 名单本体，升序去重。 */
+  user_ids: number[]
+  /** user_ids 的展示信息，顺序与 user_ids 一致。 */
+  users: ProfitExcludedUser[]
+}
+
+/**
+ * 读取当前生效的盈亏排除名单。
+ *
+ * 名单为空 = 没有排除任何人（统计口径与改动前一致）。
+ */
+export async function getUsageProfitExclusion(): Promise<UsageProfitExclusion> {
+  const { data } = await apiClient.get<UsageProfitExclusion>('/admin/usage/profit-exclusion')
+  return data
+}
+
+/**
+ * 覆盖盈亏排除名单（整份替换，不是增量）。
+ *
+ * 传空数组表示取消所有排除。
+ */
+export async function updateUsageProfitExclusion(payload: {
+  user_ids: number[]
+}): Promise<UsageProfitExclusion> {
+  const { data } = await apiClient.put<UsageProfitExclusion>('/admin/usage/profit-exclusion', payload)
+  return data
+}
+
 export const adminUsageAPI = {
   list,
   getStats,
@@ -267,7 +316,9 @@ export const adminUsageAPI = {
   createCleanupTask,
   cancelCleanupTask,
   getUpstreamCostSettings,
-  updateUpstreamCostSettings
+  updateUpstreamCostSettings,
+  getUsageProfitExclusion,
+  updateUsageProfitExclusion
 }
 
 export default adminUsageAPI

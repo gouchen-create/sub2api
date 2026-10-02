@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 )
 
@@ -270,15 +272,22 @@ func (r *usageLogRepository) GetUserModelStats(ctx context.Context, userID int64
 
 // GetUsageTrendWithFilters returns usage trend data with optional filters
 func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []TrendDataPoint, err error) {
-	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, "", requestType, stream, billingType, "", nil, nil)
+	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, "", requestType, stream, billingType, "", nil, nil, nil)
 }
 
 func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters UsageLogFilters) (results []TrendDataPoint, err error) {
-	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.ModelFilterSource, filters.RequestType, filters.Stream, filters.BillingType, filters.BillingMode, filters.UpstreamModelMismatch, filters.NativeCompactionV2)
+	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.ModelFilterSource, filters.RequestType, filters.Stream, filters.BillingType, filters.BillingMode, filters.UpstreamModelMismatch, filters.NativeCompactionV2, filters.ProfitExcludedUserIDs)
 }
 
-func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, upstreamModelMismatch *bool, nativeCompactionV2 *bool) (results []TrendDataPoint, err error) {
-	if shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
+func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, upstreamModelMismatch *bool, nativeCompactionV2 *bool, profitExcludedUserIDs []int64) (results []TrendDataPoint, err error) {
+	// 排除名单非空时必须绕开预聚合快路径。
+	//
+	// 快路径读的是 usage_dashboard_hourly / _daily，那两张表只有总量、**没有用户
+	// 维度**，因此无法把名单里的用户从收入里摘掉。若在这里放行，图上会照旧显示
+	// 未经排除的收入与毛利——数字不对，却看不出任何异常，是最难发现的那类错。
+	// 代价只是走一次明细聚合：usage_logs 有 (created_at) 索引，按天/小时分组在
+	// 几十万行量级下仍是毫秒级，不值得为它保留一条会产生错误数字的快路径。
+	if len(profitExcludedUserIDs) == 0 && shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
 			// 快路径只有 token 与金额口径，**没有上游成本**（成本是后加的列，
@@ -297,6 +306,17 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 
 	dateFormat := safeDateFormat(granularity)
 
+	// actual_cost 与 upstream_cost 的口径**刻意不同**，不要顺手改成一致：
+	// 收入侧用 FILTER 摘掉排除名单里的用户（内部人员余额是手工调的，不是真实
+	// 收款），成本侧照单全收（他们消耗的上游额度是真花钱）。见
+	// usagestats.UsageLogFilters.ProfitExcludedUserIDs 的说明。
+	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
+	args := []any{startTime, endTime}
+	if len(profitExcludedUserIDs) > 0 {
+		actualCostExpr = fmt.Sprintf("COALESCE(SUM(actual_cost) FILTER (WHERE user_id <> ALL($%d::bigint[])), 0) as actual_cost", len(args)+1)
+		args = append(args, pq.Array(profitExcludedUserIDs))
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			TO_CHAR(created_at, '%s') as date,
@@ -307,13 +327,12 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			%s,
 			COALESCE(SUM(upstream_cost_original), 0) as upstream_cost
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, dateFormat)
+	`, dateFormat, actualCostExpr)
 
-	args := []any{startTime, endTime}
 	if userID > 0 {
 		query += fmt.Sprintf(" AND user_id = $%d", len(args)+1)
 		args = append(args, userID)
