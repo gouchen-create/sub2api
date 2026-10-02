@@ -385,7 +385,39 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		c.Header("X-Usage-Stats-Cache", cacheStatusValue(hit))
 	}
 
-	response.Success(c, stats)
+	response.Success(c, newAdminUsageStatsResponse(stats))
+}
+
+// adminUsageStatsResponse 是 /admin/usage/stats 的响应体。
+//
+// 为什么不直接把 usagestats.UsageStats 发出去：那个结构体同时被**用户侧**的
+// /usage/stats 复用，而成本与毛利是经营数据，不能出现在普通用户的接口里。
+// 因此在共享结构体上把这些字段标成 json:"-"（内部计算照旧、绝不自动序列化），
+// 只在这里显式补进管理端响应。
+//
+// 这不是理论风险：改动前它确实从用户接口一起漏了出去，是接口契约测试
+// （TestAPIContracts）比对完整响应体时才把它逼出来的——只靠肉眼看 handler
+// 是发现不了的，因为那段代码只写了一句 response.Success(c, stats)。
+type adminUsageStatsResponse struct {
+	*usagestats.UsageStats
+	// TotalUpstreamCost 上游真实扣费合计（原币，A6 为美元），只含已反查到的。
+	TotalUpstreamCost float64 `json:"total_upstream_cost"`
+	// UpstreamCostMissing 尚未反查到成本的记录数；>0 时毛利是偏乐观的下界。
+	UpstreamCostMissing int64 `json:"upstream_cost_missing"`
+	// TotalProfit 毛利 = 实收 − 已知成本。
+	TotalProfit float64 `json:"total_profit"`
+}
+
+func newAdminUsageStatsResponse(stats *usagestats.UsageStats) *adminUsageStatsResponse {
+	if stats == nil {
+		return nil
+	}
+	return &adminUsageStatsResponse{
+		UsageStats:          stats,
+		TotalUpstreamCost:   stats.TotalUpstreamCost,
+		UpstreamCostMissing: stats.UpstreamCostMissing,
+		TotalProfit:         stats.TotalProfit,
+	}
 }
 
 // SearchUsers handles searching users by email keyword

@@ -258,6 +258,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	usageCleanupRepository := repository.NewUsageCleanupRepository(client, db)
 	usageCleanupService := service.ProvideUsageCleanupService(usageCleanupRepository, timingWheelService, dashboardAggregationService, configConfig)
 	adminUsageHandler := admin.NewUsageHandler(usageService, apiKeyService, adminService, usageCleanupService)
+	reconciliationSyncStateRepository := repository.NewReconciliationSyncStateRepository(client)
+	reconciliationA6Config := service.ProvideReconciliationA6Config(configConfig)
+	reconciliationA6SettingsService := service.ProvideReconciliationA6Settings(reconciliationSyncStateRepository, secretEncryptor, reconciliationA6Config, configConfig)
+	upstreamCostSettingsHandler := admin.NewUpstreamCostSettingsHandler(reconciliationA6SettingsService)
 	userAttributeHandler := admin.NewUserAttributeHandler(userAttributeService)
 	errorPassthroughRepository := repository.NewErrorPassthroughRepository(client)
 	errorPassthroughCache := repository.NewErrorPassthroughCache(redisClient)
@@ -293,24 +297,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogRepository := repository.NewAuditLogRepository(db)
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
-	reconciliationLedgerRepository := repository.NewReconciliationLedgerRepository(client, db)
-	reconciliationLedgerService := service.NewReconciliationLedgerService(reconciliationLedgerRepository)
-	reconciliationAccountRuleRepository := repository.NewReconciliationAccountRuleRepository(client)
-	reconciliationAccountRuleService := service.NewReconciliationAccountRuleService(reconciliationAccountRuleRepository, accountRepository, reconciliationLedgerService)
-	reconciliationUsageExtraRepository := repository.NewReconciliationUsageExtraRepository(client)
-	reconciliationUpstreamBillRepository := repository.NewReconciliationUpstreamBillRepository(client, db)
-	reconciliationSyncStateRepository := repository.NewReconciliationSyncStateRepository(client)
-	reconciliationUsageSource := repository.NewReconciliationUsageSourceRepository(client, db)
-	reconciliationA6Config := service.ProvideReconciliationA6Config(configConfig)
-	a6Client := service.NewA6Client(reconciliationA6Config)
-	reconciliationSyncConfig := service.ProvideReconciliationSyncConfig(configConfig)
-	reconciliationA6SettingsService := service.ProvideReconciliationA6Settings(reconciliationSyncStateRepository, secretEncryptor, reconciliationA6Config, reconciliationSyncConfig)
-	reconciliationUpstreamBillSource := service.NewReconciliationA6BillSource(a6Client, reconciliationA6SettingsService)
-	reconciliationSyncService := service.ProvideReconciliationSyncService(reconciliationUsageExtraRepository, reconciliationUpstreamBillRepository, reconciliationAccountRuleRepository, reconciliationSyncStateRepository, reconciliationUsageSource, reconciliationUpstreamBillSource, reconciliationSyncConfig)
-	companionHandler := admin.NewCompanionHandler(reconciliationLedgerService, reconciliationAccountRuleService, reconciliationSyncService, reconciliationA6SettingsService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	openCodeGoUsageService := service.ProvideOpenCodeGoUsageService(accountRepository, httpUpstream, settingService, leaderLockCache, db)
-	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, cnProviderHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, intelligenceCheckHandler, channelHandler, channelMonitorHandler, channelMonitorRequestTemplateHandler, contentModerationHandler, promptAdminHandler, paymentHandler, affiliateHandler, complianceHandler, auditLogHandler, companionHandler, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService)
+	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, adminUserHandler, groupHandler, accountHandler, adminAnnouncementHandler, dataManagementHandler, backupHandler, oAuthHandler, openAIOAuthHandler, geminiOAuthHandler, antigravityOAuthHandler, grokOAuthHandler, cnProviderHandler, proxyHandler, adminRedeemHandler, promoHandler, settingHandler, opsHandler, systemHandler, adminSubscriptionHandler, adminUsageHandler, upstreamCostSettingsHandler, userAttributeHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, intelligenceCheckHandler, channelHandler, channelMonitorHandler, channelMonitorRequestTemplateHandler, contentModerationHandler, promptAdminHandler, paymentHandler, affiliateHandler, complianceHandler, auditLogHandler, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -377,8 +366,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	intelligenceCheckRunnerService := service.ProvideIntelligenceCheckRunnerService(intelligenceCheckService, accountRepository, settingService, configConfig, leaderLockCache, db)
-	reconciliationCollector := service.ProvideReconciliationCollector(reconciliationSyncService, leaderLockCache, db, configConfig)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, intelligenceCheckRunnerService, reconciliationCollector, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	upstreamCostRepository := repository.NewUpstreamCostRepository(db)
+	a6Client := service.NewA6Client(reconciliationA6Config)
+	upstreamCostCollector := service.ProvideUpstreamCostCollector(upstreamCostRepository, a6Client, reconciliationA6SettingsService, leaderLockCache, db, configConfig)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, cnProviderBalanceCheckService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, channelMonitorV2Aggregator, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, intelligenceCheckRunnerService, upstreamCostCollector, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -459,7 +450,7 @@ func provideCleanup(
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	intelligenceCheckRunner *service.IntelligenceCheckRunnerService,
-	reconciliationCollector *service.ReconciliationCollector,
+	upstreamCostCollector *service.UpstreamCostCollector,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
@@ -489,9 +480,9 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"ReconciliationCollector", func() error {
-				if reconciliationCollector != nil {
-					reconciliationCollector.Stop()
+			{"UpstreamCostCollector", func() error {
+				if upstreamCostCollector != nil {
+					upstreamCostCollector.Stop()
 				}
 				return nil
 			}},

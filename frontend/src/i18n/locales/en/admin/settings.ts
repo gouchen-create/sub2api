@@ -13,6 +13,7 @@ export default {
         backup: 'Backup',
         payment: 'Payment',
         intelligenceCheck: 'Intelligence check',
+        upstreamCost: 'Upstream Billing',
       },
       intelligenceCheck: {
         title: 'Intelligence check',

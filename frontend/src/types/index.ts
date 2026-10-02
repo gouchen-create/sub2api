@@ -1877,6 +1877,16 @@ export interface AdminUsageLog extends UsageLog {
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
+  /**
+   * 上游真实成本（已换算为人民币），仅管理员可见。
+   *
+   * 与同一行的 total_cost / actual_cost 是两个口径：后者是本站向用户收的（收入），
+   * 这个是上游向我们收的（成本）。为 null / undefined 表示**尚未取到**，
+   * 不要当成 0 —— 页面必须把「没取到」显示成「—」。
+   */
+  upstream_cost?: number | null
+  /** 上游成本的币种（A6 为 USD），仅用于挑货币符号，不参与计算。 */
+  upstream_cost_currency?: string
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null
@@ -2027,6 +2037,12 @@ export interface UsageStatsResponse {
   total_tokens: number
   total_cost: number // 标准计费
   total_actual_cost: number // 实际扣除
+  /** 上游真实扣费合计（原币，A6 为美元），只含已反查到的。 */
+  total_upstream_cost?: number
+  /** 尚未反查到成本的记录数。 */
+  upstream_cost_missing?: number
+  /** 毛利 = total_actual_cost − total_upstream_cost，由后端算好。 */
+  total_profit?: number
   average_duration_ms: number
   models?: Record<string, number>
   endpoints?: EndpointStat[]
@@ -2046,6 +2062,10 @@ export interface TrendDataPoint {
   total_tokens: number
   cost: number // 标准计费
   actual_cost: number // 实际扣除
+  /** 上游真实扣费合计（原币，A6 为美元），只含已反查到的；不做汇率换算。 */
+  upstream_cost: number
+  /** 毛利 = actual_cost − upstream_cost，由后端算好。 */
+  profit: number
 }
 
 export interface ModelStat {

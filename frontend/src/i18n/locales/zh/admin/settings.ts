@@ -13,6 +13,7 @@ export default {
         backup: '数据备份',
         payment: '支付设置',
         intelligenceCheck: '智力检测',
+        upstreamCost: '上游账单',
       },
       intelligenceCheck: {
         title: '智力检测',

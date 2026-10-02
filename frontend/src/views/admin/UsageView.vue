@@ -63,6 +63,12 @@
           />
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </div>
+        <!-- 经营趋势独占一整行：它要在一张图里对齐「收入 / 成本 / 毛利 / 记录数」四条
+             曲线，挤在半栏宽度里横轴刻度会重叠到读不出时间。放在 token 趋势下方，
+             顺序是「先看用量、再看赚不赚」。 -->
+        <div class="mt-6">
+          <BusinessTrendChart :trend-data="trendData" :loading="chartsLoading" />
+        </div>
       </div>
       <!-- 明细区：tab 栏 + 筛选 + 内容收进同一张卡片，消除割裂感 -->
       <div class="card">
@@ -204,6 +210,7 @@ import { listErrorLogs } from '@/api/admin/ops'
 import type { OpsErrorLog } from '@/api/admin/ops'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
+import BusinessTrendChart from '@/components/charts/BusinessTrendChart.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams } from '@/api/admin/usage'
 
@@ -649,6 +656,12 @@ const allColumns = computed(() => [
   { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
+  // 「成本 / 盈亏 / 利润率」三列必须紧挨着「费用」并排：费用是本站向用户收的钱
+  // （收入），成本是上游向我们收的钱，后两列是二者的派生结果。拆开放到表格两头，
+  // 就只能来回横跳着看了。
+  { key: 'upstream_cost', label: t('admin.usage.upstreamCost'), sortable: false },
+  { key: 'profit', label: t('admin.usage.profit'), sortable: false },
+  { key: 'profit_margin', label: t('admin.usage.profitMargin'), sortable: false },
   { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },

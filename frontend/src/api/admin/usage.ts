@@ -20,6 +20,12 @@ export interface AdminUsageStatsResponse {
   total_cost: number
   total_actual_cost: number
   total_account_cost: number
+  /** 上游真实扣费合计（原币，A6 为美元）。**只含已反查到的**，不做汇率换算。 */
+  total_upstream_cost: number
+  /** 尚未反查到成本的记录数。>0 表示上面的毛利是偏乐观的下界。 */
+  upstream_cost_missing: number
+  /** 毛利 = total_actual_cost − total_upstream_cost，由后端算好，前端不重复算。 */
+  total_profit: number
   average_duration_ms: number
   endpoints?: EndpointStat[]
   upstream_endpoints?: EndpointStat[]
@@ -207,6 +213,51 @@ export async function cancelCleanupTask(taskId: number): Promise<{ id: number; s
   return data
 }
 
+/**
+ * 上游 A6 凭据的脱敏视图。
+ *
+ * **没有任何字段能承载明文令牌**：接口只回「是否已配置 + 脱敏提示」。
+ * 要给这个类型加字段时请先想清楚这一条。
+ */
+export interface UpstreamCostSettings {
+  a6_base_url: string
+  a6_user_id: string
+  a6_token_configured: boolean
+  a6_token_mask: string
+  /** 哪些键来自面板覆盖（用表单字段名，前端据此给输入框打「已覆盖」标记）。 */
+  override_keys: string[]
+}
+
+export interface UpstreamCostSettingsUpdate {
+  a6_base_url?: string
+  a6_user_id?: string
+  a6_access_token?: string
+  clear_a6_access_token?: boolean
+}
+
+/**
+ * 读取上游 A6 配置的生效状态。
+ *
+ * 这份配置只服务于「按请求 ID 反查上游真实成本」的后台任务；
+ * 使用记录页的成本列为空时，答案就在这里。
+ */
+export async function getUpstreamCostSettings(): Promise<UpstreamCostSettings> {
+  const { data } = await apiClient.get<UpstreamCostSettings>('/admin/usage/upstream-cost/settings')
+  return data
+}
+
+/**
+ * 保存上游 A6 配置覆盖值。
+ *
+ * 未出现在 payload 里的字段保持不动；`a6_access_token` 传空串等于清除覆盖。
+ */
+export async function updateUpstreamCostSettings(
+  payload: UpstreamCostSettingsUpdate
+): Promise<UpstreamCostSettings> {
+  const { data } = await apiClient.put<UpstreamCostSettings>('/admin/usage/upstream-cost/settings', payload)
+  return data
+}
+
 export const adminUsageAPI = {
   list,
   getStats,
@@ -214,7 +265,9 @@ export const adminUsageAPI = {
   searchApiKeys,
   listCleanupTasks,
   createCleanupTask,
-  cancelCleanupTask
+  cancelCleanupTask,
+  getUpstreamCostSettings,
+  updateUpstreamCostSettings
 }
 
 export default adminUsageAPI

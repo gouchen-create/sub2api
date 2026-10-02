@@ -65,13 +65,12 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
-	// 经营对账：账本读模型、上游账单、待采集调用、用量快照、账号规则、同步状态。
-	NewReconciliationLedgerRepository,
-	NewReconciliationUpstreamBillRepository,
-	NewReconciliationUsageSourceRepository,
-	NewReconciliationUsageExtraRepository,
-	NewReconciliationAccountRuleRepository,
+	// A6 生效凭据的存储：管理面板把 base_url / access_token / user_id 的覆盖值写进
+	// reconciliation_sync_state 表，上游成本取数每次反查账单前都要读它。
+	// 「经营对账」的账本、账单、规则等仓储已随模块删除，只留这一个状态表。
 	NewReconciliationSyncStateRepository,
+	// 上游成本取数：按上游请求 ID 反查真实扣费，写回 usage_logs。
+	NewUpstreamCostRepository,
 	NewUserRepository,
 	NewAPIKeyRepository,
 	NewGroupRepository,

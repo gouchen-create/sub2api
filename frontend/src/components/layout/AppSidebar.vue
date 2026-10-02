@@ -481,11 +481,6 @@ const PluginIcon = {
   render: () => h(Icon, { name: 'cube' })
 }
 
-// ReconciliationIcon 经营对账入口：复用通用图标组件里的计算器图形，保持管理菜单线条风格一致
-const ReconciliationIcon = {
-  render: () => h(Icon, { name: 'calculator' })
-}
-
 const BellIcon = {
   render: () =>
     h(
@@ -891,7 +886,6 @@ const adminNavItems = computed((): NavItem[] => {
       ],
     },
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
-    { path: '/admin/companion', label: t('nav.companion'), icon: ReconciliationIcon, hideInSimpleMode: true },
     { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
   ]
 

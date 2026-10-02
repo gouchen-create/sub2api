@@ -190,6 +190,23 @@ type UsageLog struct {
 	// extra.upstream_request_id_header 指定的头；账户未指定头名、WS 轮次
 	// 与上游没有该头的路径为 nil。
 	UpstreamRequestID *string
+	// UpstreamCostOriginal 是这笔调用在上游（A6）账单里的**真实扣费**，原币金额。
+	//
+	// 与同一行的 TotalCost / ActualCost 是两个口径：后者是按本站价目表算出来的
+	// 「应收」，决定用户被扣多少余额；这个是上游向我们收的「实付」，是成本。
+	// 两者之差就是这笔调用的毛利。
+	//
+	// **不做任何汇率换算**：本站记账本就是美元口径，上游 A6 账单也是美元，两边
+	// 同币种直接相减才是可比的。曾经存过一列换算后的人民币，反而让页面变成
+	// 「一列美元一列人民币」，要心算汇率才能比较，因此已删除。
+	//
+	// 由后台取数任务拿 UpstreamRequestID 去上游反查后回填，因此：
+	//   - nil  = 还没取到（上游账单尚未落库 / 重试次数已用尽），**不代表成本为 0**；
+	//   - 有值 = 已取到，金额即上游账单原文，此后不再变动。
+	UpstreamCostOriginal *float64
+	// UpstreamCostCurrency 是 UpstreamCostOriginal 的币种（A6 为 USD）。
+	// 仅用于显示货币符号，不参与任何计算；未取到成本时为空串。
+	UpstreamCostCurrency string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool

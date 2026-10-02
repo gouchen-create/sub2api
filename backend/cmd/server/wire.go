@@ -125,7 +125,7 @@ func provideCleanup(
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	intelligenceCheckRunner *service.IntelligenceCheckRunnerService,
-	reconciliationCollector *service.ReconciliationCollector,
+	upstreamCostCollector *service.UpstreamCostCollector,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
@@ -156,9 +156,9 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"ReconciliationCollector", func() error {
-				if reconciliationCollector != nil {
-					reconciliationCollector.Stop()
+			{"UpstreamCostCollector", func() error {
+				if upstreamCostCollector != nil {
+					upstreamCostCollector.Stop()
 				}
 				return nil
 			}},

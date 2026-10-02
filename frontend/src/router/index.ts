@@ -453,18 +453,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/admin/companion',
-    name: 'AdminCompanion',
-    component: () => import('@/views/admin/CompanionView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Business Reconciliation',
-      titleKey: 'admin.companion.title',
-      descriptionKey: 'admin.companion.description'
-    }
-  },
-  {
     path: '/admin/users',
     name: 'AdminUsers',
     component: () => import('@/views/admin/UsersView.vue'),

@@ -7,7 +7,6 @@ import settings from './settings'
 import audit from './audit'
 import promptAudit from './promptAudit'
 import plugins from './plugins'
-import companion from './companion'
 import intelligenceCheck from './intelligenceCheck'
 
 export default {
@@ -20,6 +19,5 @@ export default {
   ...audit,
   ...promptAudit,
   ...plugins,
-  ...companion,
   ...intelligenceCheck,
 }

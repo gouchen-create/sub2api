@@ -519,6 +519,42 @@ export default {
       group: '分组',
       requestId: '请求ID',
       upstreamRequestId: '上游ID',
+      // 表头就叫「成本」：这一列是上游向我们收的钱，页面上没有第二个「成本」，
+      // 加「上游」前缀只会让表头变长、还容易让人以为是另一种口径。
+      upstreamCost: '成本',
+      profit: '盈亏',
+      profitMargin: '利润率',
+      totalUpstreamCost: '总成本',
+      totalProfit: '总盈利',
+      // 成本是「边查边补」的：还没反查回来的记录不进合计，所以这个提示必须显眼，
+      // 否则主人会拿一个偏小的成本当成真实成本，把毛利算高。
+      pendingCostCount: '另有 {count} 条成本待反查',
+      costFullyFetched: '成本已全部反查',
+      // 经营趋势图：三条金额线 + 一根记录数柱，序号与图例顺序一致。
+      businessTrend: '经营趋势',
+      metric: {
+        amount: '金额',
+        calls: '调用量',
+      },
+      seriesRevenue: '下游收入',
+      seriesUpstreamCost: '上游实扣',
+      seriesProfit: '已对账毛利',
+      seriesRequests: '记录总数',
+      upstreamCostSettings: {
+        title: '上游 A6 账单配置',
+        intro: '使用记录里的「成本」列，是后台拿每条请求的上游请求 ID 去 A6 账单查询后填上的。这里的地址与密钥就是那次查询用的凭据；不配置的话成本会一直是空的。',
+        configured: '凭据已配置（{mask}），成本取数任务运行中。',
+        notConfigured: '尚未配置凭据，成本取数任务不会发起任何查询，「成本」列会一直为空。',
+        baseUrl: 'A6 站点地址',
+        baseUrlHint: '形如 https://a6.example.com，必须带 http:// 或 https://。',
+        userId: 'A6 用户标识',
+        accessToken: '访问令牌',
+        accessTokenPlaceholder: '留空表示不修改现有令牌',
+        accessTokenHint: '出于安全考虑，令牌不会回显。留空保存 = 保持原令牌不变；要清除请勾选下面的选项。',
+        clearToken: '清除已保存的令牌（回落到配置文件里的值）',
+        saved: '已保存，新的取数任务会立刻用上这份凭据。',
+        overridden: '已覆盖',
+      },
       requestIdCopied: '请求ID已复制',
       upstreamRequestIdCopied: '上游ID已复制',
       allModels: '全部模型',

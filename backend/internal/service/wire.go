@@ -860,16 +860,14 @@ func ProvideAPIKeyService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
-	// 经营对账：看板账本、账号规则、A6 客户端与账单来源、配置覆盖、同步与匹配。
-	NewReconciliationLedgerService,
-	NewReconciliationAccountRuleService,
+	// A6 上游连接：客户端 + 「配置默认值 + 面板覆盖」的生效凭据。
+	// 「经营对账」模块已删除，这几个 provider 之所以保留，是因为上游成本取数
+	// 每次反查账单前都要用生效凭据设置客户端（详见 reconciliation_a6_wire.go）。
 	NewA6Client,
-	NewReconciliationA6BillSource,
 	ProvideReconciliationA6Config,
-	ProvideReconciliationSyncConfig,
 	ProvideReconciliationA6Settings,
-	ProvideReconciliationSyncService,
-	ProvideReconciliationCollector,
+	// 上游成本取数：按上游请求 ID 反查 A6 账单，把真实扣费写回使用记录。
+	ProvideUpstreamCostCollector,
 	ProvideProviderPricingService,
 	// Core services
 	ProvideAuthService,

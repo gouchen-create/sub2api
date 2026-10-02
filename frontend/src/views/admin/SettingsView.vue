@@ -8909,7 +8909,13 @@
         </div>
 
         <!-- Tab: 智力检测（鹈鹕测试） -->
-        <div v-show="activeTab === 'intelligenceCheck'" class="space-y-6">
+        <!-- 上游 A6 账单配置：成本列的取数凭据。放系统设置里，因为它是「配一次就不动」
+           的基础设施；放在使用记录页反而会被当成日常操作。 -->
+      <div v-show="activeTab === 'upstreamCost'" class="space-y-6">
+        <UpstreamCostSettingsPanel />
+      </div>
+
+      <div v-show="activeTab === 'intelligenceCheck'" class="space-y-6">
           <!-- 跑测策略 -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -9346,6 +9352,7 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
+import UpstreamCostSettingsPanel from "@/components/admin/usage/UpstreamCostSettingsPanel.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,
@@ -9405,7 +9412,8 @@ type SettingsTab =
   | "payment"
   | "email"
   | "backup"
-  | "intelligenceCheck";
+  | "intelligenceCheck"
+  | "upstreamCost";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
@@ -9418,6 +9426,7 @@ const settingsTabs = [
   { key: "email" as SettingsTab, icon: "mail" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
   { key: "intelligenceCheck" as SettingsTab, icon: "beaker" as const },
+  { key: "upstreamCost" as SettingsTab, icon: "cog" as const },
 ];
 
 const settingsTabKeyboardActions = {

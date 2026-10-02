@@ -690,6 +690,16 @@ type AdminUsageLog struct {
 	ModelMappingChain *string `json:"model_mapping_chain,omitempty"`
 	// UpstreamRequestID 是直接上游声明的请求标识，仅管理端可见。
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
+	// UpstreamCost 是这笔调用在上游账单里的真实扣费（原币，A6 为美元），仅管理端可见。
+	//
+	// 用指针而不是数值 + 零值：nil 表示「还没取到」，与前端的「—」对应；
+	// 若用 0 表示，页面就会把「没取到」和「上游真的没扣钱」显示成同一个样子。
+	//
+	// 字段名就取 upstream_cost（对应表头「成本」），刻意不带 cny/original 之类后缀：
+	// 本站与上游同为美元口径，不存在第二个币种，后缀只会让人以为还有别的版本。
+	UpstreamCost *float64 `json:"upstream_cost,omitempty"`
+	// UpstreamCostCurrency 是 UpstreamCost 的币种（A6 为 USD），仅用于显示货币符号。
+	UpstreamCostCurrency string `json:"upstream_cost_currency,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 

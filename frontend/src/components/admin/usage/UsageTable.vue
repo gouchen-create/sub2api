@@ -231,6 +231,38 @@
           </div>
         </template>
 
+        <!-- 上游真实成本：与左侧「费用」是两个口径——费用是本站向用户收的（收入），
+             这里是上游向我们收的（成本）。两者同为美元原值，**不做任何汇率换算**，
+             所以可以直接相减得毛利（见右侧「盈亏」列）。
+             取不到时显示「—」而不是 0：「还没查到」和「上游真的没扣钱」必须区分开，
+             否则会把未取数误读成零成本，进而把毛利算高。 -->
+        <template #cell-upstream_cost="{ row }">
+          <div v-if="row.upstream_cost != null" class="text-sm">
+            <span class="font-medium text-blue-600 dark:text-blue-400">
+              {{ currencySymbol(row.upstream_cost_currency) }}{{ row.upstream_cost.toFixed(6) }}
+            </span>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
+        <!-- 盈亏：收入 − 成本。正为盈利（绿 +），负为亏损（红 −）。
+             成本未知时显示「—」而不是把成本当 0 算出一个虚高的盈利——
+             这正是最容易误导经营判断的地方。 -->
+        <template #cell-profit="{ row }">
+          <div v-if="rowProfit(row) != null" class="text-sm font-medium tabular-nums" :class="profitClass(rowProfit(row)!)">
+            {{ formatSignedUSD(rowProfit(row)!) }}
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
+        <!-- 利润率：盈亏 ÷ 收入。收入为 0 时无意义，同样显示「—」而不是 0% 或无穷。 -->
+        <template #cell-profit_margin="{ row }">
+          <div v-if="rowProfitMargin(row) != null" class="text-sm font-medium tabular-nums" :class="profitClass(rowProfit(row)!)">
+            {{ formatSignedPercent(rowProfitMargin(row)!) }}
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
         <!-- 合并首字/总耗时的健康度列：左侧色条上端随首字档、下端随总耗时档，中段(40%-60%)短渐变过渡，便于纵向扫视整体健康状况 -->
         <template #cell-latency="{ row }">
           <div class="flex items-stretch gap-2">
@@ -575,6 +607,50 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
   const base = row.account_stats_cost != null ? row.account_stats_cost : (row.total_cost ?? 0)
   const result = base * (row.account_rate_multiplier ?? 1)
   return Number.isNaN(result) ? 0 : result
+}
+
+/** 成本币种 → 货币符号。**未知币种直接显示代码**，不要猜成 $ —— 猜错等于报了个假数字。 */
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: '$', CNY: '¥', EUR: '€' }
+
+function currencySymbol(currency?: string | null): string {
+  if (!currency) return '$'
+  return CURRENCY_SYMBOLS[currency.toUpperCase()] ?? `${currency.toUpperCase()} `
+}
+
+/**
+ * 单行毛利 = 收入 − 成本。成本未知（还没反查到）时返回 null。
+ *
+ * 关键：**绝不能把未知成本当 0**。那会算出一个虚高的盈利，比不显示更危险——
+ * 页面上一列绿字「+$0.0250」看不出它是真赚了还是只是还没查到成本。
+ */
+function rowProfit(row: Pick<AdminUsageLog, 'actual_cost' | 'upstream_cost'>): number | null {
+  if (row.upstream_cost == null) return null
+  return (row.actual_cost ?? 0) - row.upstream_cost
+}
+
+/** 利润率 = 毛利 ÷ 收入 × 100。收入为 0 时无意义，返回 null 而不是 0% 或 ±∞。 */
+function rowProfitMargin(row: Pick<AdminUsageLog, 'actual_cost' | 'upstream_cost'>): number | null {
+  const profit = rowProfit(row)
+  if (profit == null) return null
+  const revenue = row.actual_cost ?? 0
+  if (revenue === 0) return null
+  return (profit / revenue) * 100
+}
+
+/** 盈利绿、亏损红、持平中性；未知成本走不到这里（上游已判 null）。 */
+function profitClass(profit: number): string {
+  if (profit > 0) return 'text-green-600 dark:text-green-400'
+  if (profit < 0) return 'text-red-600 dark:text-red-400'
+  return 'text-gray-600 dark:text-gray-400'
+}
+
+/** 显式带符号，避免「一片绿字分不清正负」：+$0.000015 / -$0.000001。 */
+function formatSignedUSD(value: number): string {
+  return `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(6)}`
+}
+
+function formatSignedPercent(value: number): string {
+  return `${value < 0 ? '-' : '+'}${Math.abs(value).toFixed(2)}%`
 }
 
 

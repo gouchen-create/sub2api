@@ -8,11 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,33 +345,6 @@ func TestReconciliationA6SettingsViewNeverCarriesPlaintext(t *testing.T) {
 	require.True(t, view.A6TokenConfigured)
 }
 
-// ==================== 3. 汇率规则与同步服务共用一份实现 ====================
-
-func TestReconciliationA6SettingsSharesFxRuleWithSyncService(t *testing.T) {
-	ctx := context.Background()
-	state := newA6SettingsStateRepoStub()
-	settings := NewReconciliationA6SettingsService(state, &a6SettingsEncryptorStub{}, a6SettingsDefaults(), 7.2)
-	syncSvc := NewReconciliationSyncService(nil, nil, nil, state, nil, nil,
-		ReconciliationSyncConfig{FxUSDCNYRate: 7.2})
-
-	require.Equal(t, 7.2, settings.Effective(ctx).FxUSDCNYRate)
-	require.Equal(t, 7.2, syncSvc.EffectiveFxRate(ctx))
-
-	_, err := settings.Update(ctx, ReconciliationA6SettingsInput{FxUSDCNYRate: a6SettingsFloatPtr(6.71)})
-	require.NoError(t, err)
-	require.Equal(t, 6.71, settings.Effective(ctx).FxUSDCNYRate)
-	require.Equal(t, 6.71, syncSvc.EffectiveFxRate(ctx), "设置页保存的汇率必须立刻成为记账汇率")
-
-	syncSvc.SetFxRateOverride(ctx, 0) // 0 表示清除覆盖
-	require.Equal(t, 7.2, settings.Effective(ctx).FxUSDCNYRate, "清除后两边都要回到配置默认值")
-
-	// 配置默认值本身没配（<= 0）时，两边都必须按 1 处理，不能一个 1 一个 0。
-	zeroDefault := NewReconciliationA6SettingsService(newA6SettingsStateRepoStub(), &a6SettingsEncryptorStub{}, a6SettingsDefaults(), 0)
-	zeroSync := NewReconciliationSyncService(nil, nil, nil, newA6SettingsStateRepoStub(), nil, nil, ReconciliationSyncConfig{})
-	require.Equal(t, 1.0, zeroDefault.Effective(ctx).FxUSDCNYRate)
-	require.Equal(t, 1.0, zeroSync.EffectiveFxRate(ctx))
-}
-
 // ==================== 4. 保存语义 ====================
 
 func TestReconciliationA6SettingsUpdateKeepsTokenWhenBlank(t *testing.T) {
@@ -573,85 +543,6 @@ func TestReconciliationA6SettingsPropagatesStoreErrors(t *testing.T) {
 
 	_, err := svc.Update(ctx, ReconciliationA6SettingsInput{BaseURL: a6SettingsStringPtr("https://panel.example.com")})
 	require.ErrorIs(t, err, assert.AnError, "写库失败必须原样上报，接口层再翻成 500")
-}
-
-// ==================== 6. 账单来源要用上覆盖值 ====================
-
-// newA6SettingsUpstreamServer 起一个最小可用的假 A6：/api/status 给计费单位，
-// /api/log/self 回一条账单。
-func newA6SettingsUpstreamServer(t *testing.T) (*httptest.Server, *int32) {
-	t.Helper()
-	var calls int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case a6StatusPath:
-			_, _ = w.Write([]byte(`{"success":true,"data":{"quota_per_unit":500000}}`))
-		case a6SelfLogPath:
-			atomic.AddInt32(&calls, 1)
-			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[
-				{"request_id":"req-override","created_at":1730000100,"model_name":"claude-sonnet-4-5",
-				 "token_name":"token-a","prompt_tokens":10,"completion_tokens":20,"quota":250000}
-			],"total":1}}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	return server, &calls
-}
-
-func TestReconciliationA6BillSourceUsesPanelOverride(t *testing.T) {
-	ctx := context.Background()
-	server, calls := newA6SettingsUpstreamServer(t)
-
-	// 客户端构造时用的是配置层的凭据（这里故意给一个连不上的地址）：
-	// 如果面板覆盖没生效，本轮拉取就会去连 127.0.0.1:9 并失败。
-	client := NewA6Client(ReconciliationA6Config{
-		BaseURL:     "http://127.0.0.1:9",
-		AccessToken: "config-token-000000",
-		UserID:      "config-user",
-		Timeout:     5 * time.Second,
-	})
-	state := newA6SettingsStateRepoStub()
-	encryptor := &a6SettingsEncryptorStub{}
-	settings := NewReconciliationA6SettingsService(state, encryptor, a6SettingsDefaults(), 7.2)
-	_, err := settings.Update(ctx, ReconciliationA6SettingsInput{
-		BaseURL:     a6SettingsStringPtr(server.URL),
-		UserID:      a6SettingsStringPtr("panel-user"),
-		AccessToken: a6SettingsStringPtr("panel-token-abcdefgh"),
-	})
-	require.NoError(t, err)
-
-	source := NewReconciliationA6BillSource(client, settings)
-	payloads, err := source.FetchBills(ctx, ReconciliationBillQuery{
-		From:     time.Unix(1730000000, 0).UTC(),
-		To:       time.Unix(1730003600, 0).UTC(),
-		PageSize: 10,
-	})
-	require.NoError(t, err)
-	require.Len(t, payloads, 1)
-	require.Equal(t, "req-override", payloads[0].UpstreamRequestID)
-	require.Equal(t, int32(1), atomic.LoadInt32(calls))
-	require.Equal(t, server.URL, client.Config().BaseURL, "面板覆盖必须刷进客户端")
-	require.Equal(t, "panel-token-abcdefgh", client.Config().AccessToken)
-	require.Equal(t, "panel-user", client.Config().UserID)
-}
-
-func TestReconciliationA6BillSourceReportsUnavailableWithoutCredentials(t *testing.T) {
-	ctx := context.Background()
-	server, calls := newA6SettingsUpstreamServer(t)
-
-	client := NewA6Client(ReconciliationA6Config{BaseURL: server.URL, AccessToken: "", UserID: "u"})
-	settings := NewReconciliationA6SettingsService(
-		newA6SettingsStateRepoStub(), &a6SettingsEncryptorStub{},
-		ReconciliationA6Config{BaseURL: server.URL}, 7.2,
-	)
-
-	source := NewReconciliationA6BillSource(client, settings)
-	_, err := source.FetchBills(ctx, ReconciliationBillQuery{From: time.Now().Add(-time.Hour), To: time.Now()})
-	require.ErrorIs(t, err, ErrReconciliationBillSourceUnavailable)
-	require.Zero(t, atomic.LoadInt32(calls), "凭据不齐时一个请求都不该发出去")
-	require.False(t, settings.Effective(ctx).Configured())
 }
 
 func TestReconciliationA6SettingsConfiguredNeedsAllThree(t *testing.T) {

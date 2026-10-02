@@ -133,35 +133,6 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
-
-		// 经营对账（已内置进本进程，仅管理员可访问）
-		registerCompanionRoutes(admin, h)
-	}
-}
-
-// registerCompanionRoutes 注册经营对账的只读与同步接口。
-//
-// 这些接口曾经反向代理到独立的 companion 旁路服务，现在直接由本进程的对账服务响应；
-// 路径、方法与响应结构未变，因此管理后台前端无需任何改动。
-func registerCompanionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
-	companion := admin.Group("/companion")
-	{
-		companion.GET("/status", h.Admin.Companion.Status)
-		companion.GET("/settings", h.Admin.Companion.Settings)
-		companion.PUT("/settings", h.Admin.Companion.UpdateSettings)
-		companion.GET("/summary", h.Admin.Companion.Summary)
-		companion.GET("/timeseries", h.Admin.Companion.Timeseries)
-		companion.GET("/requests", h.Admin.Companion.Requests)
-		companion.GET("/account-rules", h.Admin.Companion.AccountRules)
-		companion.PUT("/account-rules/:account_id", h.Admin.Companion.UpsertAccountRule)
-		companion.DELETE("/account-rules/:account_id", h.Admin.Companion.DeleteAccountRule)
-		companion.POST("/collect", h.Admin.Companion.Collect)
-		// 把「匹配不上」的孤儿账单退回队列并立刻重试一轮：管理员改完规则后显式触发，
-		// 不做成常驻任务——无差别自动重试会让注定匹配不上的账单反复占用孤儿宽限期。
-		companion.POST("/requeue-unmatched", h.Admin.Companion.RequeueUnmatched)
-		companion.GET("/a6/backfill", h.Admin.Companion.A6BackfillStatus)
-		companion.POST("/a6/backfill", h.Admin.Companion.StartA6Backfill)
-		companion.POST("/upstream/import", h.Admin.Companion.ImportUpstream)
 	}
 }
 
@@ -739,6 +710,11 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		usage.GET("/cleanup-tasks", h.Admin.Usage.ListCleanupTasks)
 		usage.POST("/cleanup-tasks", h.Admin.Usage.CreateCleanupTask)
 		usage.POST("/cleanup-tasks/:id/cancel", h.Admin.Usage.CancelCleanupTask)
+		// 上游 A6 凭据：后台取数任务靠它按请求 ID 反查真实成本。
+		// 路径挂在 usage 下而不是系统设置下，是因为它只服务于「使用记录」
+		// 页面上那一列成本——成本是空的时候，人来这里找原因。
+		usage.GET("/upstream-cost/settings", h.Admin.UpstreamCostSettings.Settings)
+		usage.PUT("/upstream-cost/settings", h.Admin.UpstreamCostSettings.UpdateSettings)
 	}
 }
 

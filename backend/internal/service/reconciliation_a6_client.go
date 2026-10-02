@@ -144,11 +144,32 @@ var (
 		"RECONCILIATION_A6_INVALID_RESPONSE",
 		"A6 returned a malformed response",
 	)
+	// ErrReconciliationA6RequestIDEmpty 调用方给出了空的上游请求 ID。
+	//
+	// 这是调用方的 bug（说明拿一条没有 ID 的记录去查了），必须报错而不是
+	// 当成「查无此单」——否则参数校验类的错误会被记进重试预算，掩盖真正的问题。
+	ErrReconciliationA6RequestIDEmpty = infraerrors.New(
+		http.StatusBadRequest,
+		"RECONCILIATION_A6_REQUEST_ID_EMPTY",
+		"A6 request_id lookup requires a non-empty request id",
+	)
 	// ErrReconciliationA6Rejected 上游以 success=false 明确拒绝本次请求。
 	ErrReconciliationA6Rejected = infraerrors.New(
 		http.StatusBadGateway,
 		"RECONCILIATION_A6_REJECTED",
 		"A6 rejected the request",
+	)
+	// ErrReconciliationA6RequestIDIgnored 按请求 ID 反查时，上游疑似忽略了 request_id 参数。
+	//
+	// 这个错误码单独存在，是为了把它和「查无此单」严格分开：
+	// A6 对**无法识别的查询参数是静默忽略**的——参数名写错不会报错，而是把全量账单
+	// 原样返回。若把这种情况当成「查无此单」，取数任务会永远查不到成本，
+	// 而日志里只有一片平静的「未取到」，没有任何线索指向真正的原因（参数失效）。
+	// 因此这里宁可报错刷日志，也不静默降级。
+	ErrReconciliationA6RequestIDIgnored = infraerrors.New(
+		http.StatusBadGateway,
+		"RECONCILIATION_A6_REQUEST_ID_IGNORED",
+		"A6 appears to have ignored the request_id filter",
 	)
 	// ErrReconciliationA6QuotaPerUnitUnavailable 从未成功取到过 quota_per_unit，无法把 quota 换算成金额。
 	ErrReconciliationA6QuotaPerUnitUnavailable = infraerrors.ServiceUnavailable(
@@ -552,6 +573,97 @@ func (c *A6Client) FetchBills(ctx context.Context, query A6BillQuery) ([]Reconci
 	return bills, ErrReconciliationA6PageLimitReached.WithMetadata(map[string]string{
 		"max_pages": strconv.Itoa(maxPages),
 	})
+}
+
+// a6RequestIDLookupPageSize 是「按请求 ID 反查」时请求的每页条数。
+//
+// 取一个很小的值是有意的：精确反查正常只会命中 1 条。如果上游忽略了 request_id
+// 参数而返回全量，这个小页会让「本页被塞满」成为一个明确的报警信号，
+// 而不是悄悄返回一页别人的账单让我们去逐条比对（见下面的防呆逻辑）。
+const a6RequestIDLookupPageSize = 5
+
+// FetchBillByRequestID 按上游请求 ID 精确反查**单条**账单。
+//
+// 与 FetchBills 的分工：那个按时间窗口批量拉，会把该 A6 账号上**其它系统**的扣费
+// 一并拉回本库（该账号为多系统共用），因此需要额外维护「不是我们的账单」这类状态；
+// 这个只查一条，天然只会拿到本系统自己那笔。
+//
+// 返回值是三态，调用方必须区分：
+//   - (bill, true, nil)  查到了，这是这一笔的真实扣费；
+//   - (_, false, nil)    上游明确没有这条账单。可能是尚未落库（实测 A6 账单落库
+//     延迟 P50≈13s、P99≈599s、最大 600s），也可能是这笔根本没在 A6 产生扣费。
+//     调用方应退避后重试，重试用尽再标记为「未取到」；
+//   - (_, false, err)    本次查询本身失败（网络/鉴权/上游报错/参数被忽略）。
+//     与「没有这条」语义完全不同，不应被当成「确认无此单」消耗重试预算。
+//
+// 不下发时间窗：request_id 是精确等值条件，窗口只会因为本机与上游的时钟偏差
+// 把一个本来能命中的账单排除掉，属于净负担。
+//
+// 防呆（必须有）：A6 会**静默忽略**它不认识的查询参数。若 request_id 失效，
+// 上游会把全量账单当成查询结果返回。因此这里逐条核对返回记录里的 request_id，
+// 只认**逐字相等**的那一条；并且一旦发现「本页被塞满却一条都不相等」，
+// 就判定为参数被忽略并报 ErrReconciliationA6RequestIDIgnored，
+// 绝不让这种情况伪装成「查无此单」而永远静默失败。
+func (c *A6Client) FetchBillByRequestID(ctx context.Context, requestID string) (ReconciliationA6Bill, bool, error) {
+	wanted := strings.TrimSpace(requestID)
+	if wanted == "" {
+		return ReconciliationA6Bill{}, false, ErrReconciliationA6RequestIDEmpty
+	}
+	cfg := c.Config()
+	if err := c.validate(cfg); err != nil {
+		return ReconciliationA6Bill{}, false, err
+	}
+	quotaPerUnit, err := c.QuotaPerUnit(ctx)
+	if err != nil {
+		return ReconciliationA6Bill{}, false, err
+	}
+
+	params := url.Values{
+		"p":          {"1"},
+		"page_size":  {strconv.Itoa(a6RequestIDLookupPageSize)},
+		"type":       {a6LogTypeConsumption},
+		"request_id": {wanted},
+	}
+	envelope, err := c.getJSONWithRetry(ctx, cfg, a6SelfLogPath, params)
+	if err != nil {
+		return ReconciliationA6Bill{}, false, err
+	}
+	if err := a6CheckSuccess(envelope); err != nil {
+		return ReconciliationA6Bill{}, false, err
+	}
+	extracted, err := a6ExtractBillItems(envelope)
+	if err != nil {
+		return ReconciliationA6Bill{}, false, err
+	}
+
+	var found *ReconciliationA6Bill
+	for _, item := range extracted.items {
+		bill, skipReason := c.normalizeBill(item, quotaPerUnit)
+		if skipReason != "" || bill.RequestID != wanted {
+			continue
+		}
+		if found != nil {
+			// 同一个请求 ID 在上游出现两条账单：成本金额存在歧义。此时**不猜**，
+			// 报错交由人工核对，避免把一笔不属于它的金额写到这条调用上。
+			return ReconciliationA6Bill{}, false, ErrReconciliationA6InvalidResponse.WithMetadata(map[string]string{
+				"reason": "duplicate_request_id_bills",
+			})
+		}
+		copied := bill
+		found = &copied
+	}
+	if found != nil {
+		return *found, true, nil
+	}
+
+	// 一条都没命中。区分「上游确实没有这条」与「上游忽略了过滤参数」：
+	// 精确反查不可能把整页塞满，塞满就说明过滤条件没生效。
+	if len(extracted.items) >= a6RequestIDLookupPageSize {
+		return ReconciliationA6Bill{}, false, ErrReconciliationA6RequestIDIgnored.WithMetadata(map[string]string{
+			"returned": strconv.Itoa(len(extracted.items)),
+		})
+	}
+	return ReconciliationA6Bill{}, false, nil
 }
 
 // ==================== 规范化 ====================

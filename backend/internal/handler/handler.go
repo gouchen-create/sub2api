@@ -7,27 +7,30 @@ import (
 
 // AdminHandlers contains all admin-related HTTP handlers
 type AdminHandlers struct {
-	Dashboard              *admin.DashboardHandler
-	User                   *admin.UserHandler
-	Group                  *admin.GroupHandler
-	Account                *admin.AccountHandler
-	Announcement           *admin.AnnouncementHandler
-	DataManagement         *admin.DataManagementHandler
-	Backup                 *admin.BackupHandler
-	OAuth                  *admin.OAuthHandler
-	OpenAIOAuth            *admin.OpenAIOAuthHandler
-	GeminiOAuth            *admin.GeminiOAuthHandler
-	AntigravityOAuth       *admin.AntigravityOAuthHandler
-	GrokOAuth              *admin.GrokOAuthHandler
-	CNProvider             *admin.CNProviderHandler
-	Proxy                  *admin.ProxyHandler
-	Redeem                 *admin.RedeemHandler
-	Promo                  *admin.PromoHandler
-	Setting                *admin.SettingHandler
-	Ops                    *admin.OpsHandler
-	System                 *admin.SystemHandler
-	Subscription           *admin.SubscriptionHandler
-	Usage                  *admin.UsageHandler
+	Dashboard        *admin.DashboardHandler
+	User             *admin.UserHandler
+	Group            *admin.GroupHandler
+	Account          *admin.AccountHandler
+	Announcement     *admin.AnnouncementHandler
+	DataManagement   *admin.DataManagementHandler
+	Backup           *admin.BackupHandler
+	OAuth            *admin.OAuthHandler
+	OpenAIOAuth      *admin.OpenAIOAuthHandler
+	GeminiOAuth      *admin.GeminiOAuthHandler
+	AntigravityOAuth *admin.AntigravityOAuthHandler
+	GrokOAuth        *admin.GrokOAuthHandler
+	CNProvider       *admin.CNProviderHandler
+	Proxy            *admin.ProxyHandler
+	Redeem           *admin.RedeemHandler
+	Promo            *admin.PromoHandler
+	Setting          *admin.SettingHandler
+	Ops              *admin.OpsHandler
+	System           *admin.SystemHandler
+	Subscription     *admin.SubscriptionHandler
+	Usage            *admin.UsageHandler
+	// UpstreamCostSettings 管的是「后台按请求 ID 反查上游真实成本」用的 A6 凭据。
+	// 它和使用记录页面是一体的：成本列为空时，答案就在这个 handler 管的那份配置里。
+	UpstreamCostSettings   *admin.UpstreamCostSettingsHandler
 	UserAttribute          *admin.UserAttributeHandler
 	ErrorPassthrough       *admin.ErrorPassthroughHandler
 	TLSFingerprintProfile  *admin.TLSFingerprintProfileHandler
@@ -44,7 +47,6 @@ type AdminHandlers struct {
 	Affiliate              *admin.AffiliateHandler
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
-	Companion              *admin.CompanionHandler
 }
 
 // Handlers contains all HTTP handlers
