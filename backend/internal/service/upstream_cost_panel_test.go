@@ -31,6 +31,19 @@ type upstreamCostRepoStub struct {
 	pending  []UpstreamCostPending
 	resolved map[int64]UpstreamCostValue
 	retried  []int64
+
+	// 兜底补账的观测点：记下每次调用的窗口与上限，并允许伪造返回值/错误。
+	requeueCalls  []upstreamCostRequeueCall
+	requeueResult int64
+	requeueErr    error
+}
+
+// upstreamCostRequeueCall 记下一次补账调用收到的参数，供断言窗口与封顶值。
+type upstreamCostRequeueCall struct {
+	since       time.Time
+	until       time.Time
+	maxAttempts int
+	limit       int
 }
 
 func newUpstreamCostRepoStub(pending ...UpstreamCostPending) *upstreamCostRepoStub {
@@ -59,6 +72,23 @@ func (r *upstreamCostRepoStub) RetryUpstreamCost(_ context.Context, usageLogID i
 	defer r.mu.Unlock()
 	r.retried = append(r.retried, usageLogID)
 	return nil
+}
+
+func (r *upstreamCostRepoStub) RequeueExhaustedCosts(
+	_ context.Context, since time.Time, until time.Time, maxAttempts int, limit int,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.requeueCalls = append(r.requeueCalls, upstreamCostRequeueCall{
+		since: since, until: until, maxAttempts: maxAttempts, limit: limit,
+	})
+	return r.requeueResult, r.requeueErr
+}
+
+func (r *upstreamCostRepoStub) requeueCallsSnapshot() []upstreamCostRequeueCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]upstreamCostRequeueCall(nil), r.requeueCalls...)
 }
 
 func (r *upstreamCostRepoStub) resolvedValue(id int64) (UpstreamCostValue, bool) {

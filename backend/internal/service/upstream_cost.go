@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"github.com/shopspring/decimal"
 )
 
@@ -41,6 +43,22 @@ const (
 	upstreamCostLeaderLockTTL = 2 * time.Minute
 )
 
+// 兜底补账的 leader 锁。刻意与取数轮次分开：补账要跑的是一条快速 UPDATE，
+// 但它落点固定在清晨，与 30 秒一轮的取数必然相遇。共用一个锁也能跑，
+// 但那会引入「谁把谁挡了」的解释成本——分开之后两者各自独立判定，日志也各自留痕。
+const upstreamCostSweepLeaderLockKey = "upstream_cost:sweep:leader"
+
+// upstreamCostDefaultSweepSchedule 兜底补账的默认时刻：每天 06:00（进程本地时区）。
+//
+// 用 cron 五段式而不是「固定小时数」：日后若要改成「每天两次」或「周末也跑」，
+// 改一个字符串即可，不必动调度代码。
+const upstreamCostDefaultSweepSchedule = "0 6 * * *"
+
+// upstreamCostSweepCronParser 与项目里其它定时任务保持同一套解析器：
+// 只认五段式（分 时 日 月 周），不引入秒级字段——补账不需要秒级精度，
+// 而多一种表达式方言就多一处会写错的地方。
+var upstreamCostSweepCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
 // UpstreamCostValue 是一条使用记录对应的上游真实扣费。
 //
 // 刻意**不含**任何换算结果：本站的「费用」是美元原值，对账要看的是「收了多少、
@@ -67,7 +85,7 @@ type UpstreamCostPending struct {
 
 // UpstreamCostRepository 是取数任务需要的持久化能力。
 //
-// 刻意只暴露三个动作，对应状态机的三条边；不提供「按任意条件查询」的口子，
+// 刻意只暴露四个动作，对应状态机的四条边；不提供「按任意条件查询」的口子，
 // 避免取数任务以后长出报表职责。状态本身不落库，所以也没有「改状态」的动作。
 type UpstreamCostRepository interface {
 	// ListUpstreamCostPending 取一批待查记录，按记账时刻升序（先来先查，避免饿死）。
@@ -83,6 +101,13 @@ type UpstreamCostRepository interface {
 	// RetryUpstreamCost 记一次「查了但没有」：尝试次数加一。
 	// 次数达到上限后，该记录自然不再进入待查队列，在报表上呈现为「未取到」。
 	RetryUpstreamCost(ctx context.Context, usageLogID int64) error
+	// RequeueExhaustedCosts 把 [since, until) 窗口内「重试用尽」的记录重新排回待查队列，
+	// 返回实际重排的条数。最多处理 limit 条。
+	//
+	// 这是第四条边「用尽可撤销」，存在的理由是账单会迟到（见
+	// UpstreamCostCollectorConfig.SweepLookback 的说明）。
+	// 只清 upstream_cost_attempts，不碰金额与 fetched_at。
+	RequeueExhaustedCosts(ctx context.Context, since time.Time, until time.Time, maxAttempts int, limit int) (int64, error)
 }
 
 // UpstreamCostCollectorConfig 是取数任务的调度参数。
@@ -98,8 +123,14 @@ type UpstreamCostCollectorConfig struct {
 	FirstDelay time.Duration
 	// MaxAttempts 最多查几次。
 	//
-	// 与 Interval 一起决定放弃的时刻：90s + 20×30s ≈ 11.5 分钟，
-	// 覆盖实测最大落库延迟（600s）并留出余量。
+	// 与 Interval 一起决定认输时刻，默认 60 次 ≈ 90s + 60×30s ≈ 31.5 分钟。
+	//
+	// 这个数字是被线上咬过之后从 20 次（≈11.5 分钟）调上来的。原值只比实测
+	// 最大落库延迟（600s）多出 1.5 分钟余量，而 2026-10-02 UTC 16:00~18:59
+	// 上游出现延迟尖峰时，177 条里有 16 条（9.0%）被提前认输——前后各 21 小时
+	// 零失败，唯独这三小时出事。次日重查一次全中，证明账单只是迟到。
+	// 调到 60 次把余量从 1.5 分钟拉到约 21.5 分钟，让绝大多数迟到账单
+	// 当天就补齐，轮不到隔夜兜底。
 	MaxAttempts int
 	// BatchSize 每轮最多处理多少条。
 	//
@@ -107,6 +138,38 @@ type UpstreamCostCollectorConfig struct {
 	// 若不封顶就会在同一个 tick 里对上游连发上千次请求。超出的留到下一轮，
 	// 按记账时刻升序处理，早的记录优先。
 	BatchSize int
+	// SweepSchedule 兜底补账的 cron 表达式（五段式，按进程本地时区解释）。
+	//
+	// 默认每天 06:00。留空表示关闭兜底补账（主取数循环不受影响）。
+	//
+	// 为什么需要这一层：FirstDelay + MaxAttempts 的预算总有尽头，而上游账单
+	// 的迟到没有理论上限。预算只能覆盖「常见延迟」，覆盖不了「延迟尖峰」——
+	// 一旦尖峰超过预算，记录就落到「未取到」这个终局状态，此后无人再问。
+	// 隔夜再给一次机会，能把这类尖峰自动抹平，不需要人去发现和手工补。
+	//
+	// 选 06:00 的理由：上游账单按自然日结算，凌晨之后落库最迟的一批也已到位；
+	// 取 6 点而不是 5 点，是给「前一晚 23:59 的调用」多留一小时结算余量。
+	SweepSchedule string
+	// SweepLookback 兜底补账回看的窗口长度，默认 72 小时（3 个自然日）。
+	//
+	// 之所以不是「只看前一天」：某天任务失败或服务停机跨过了补账时刻时，
+	// 只回看一天会让那批记录永久成为孤儿——而孤儿正是这个机制要消灭的东西。
+	// 三天的窗口能自愈任何一次单点失败。
+	//
+	// 窗口同时是重排次数的天然上限：一条记录最多被同一个窗口扫到「窗口天数」次，
+	// 之后就永久出局。这是刻意不用新增计数列换来的——usage_logs 是全站最热的表，
+	// 为「这条记录被补账过几次」再加一列，代价远大于收益。
+	SweepLookback time.Duration
+	// SweepBatchSize 单次补账最多重排多少条，默认 500。
+	//
+	// 同样必须封顶：补账面对的是「已经认输」的存量，若某天因异常堆积出几万条，
+	// 不封顶就会在下一次补账时对上游连发几万次请求。超出的留到明天，早的记录优先。
+	SweepBatchSize int
+	// SweepStartupDelay 进程启动多久后先补一次账，默认 5 分钟。
+	//
+	// 覆盖「停机跨过了 06:00」这种情况：cron 不会补跑错过的时刻，
+	// 若不在这里兜一次，那一晚的缺口要等到第二天 06:00 才被处理。
+	SweepStartupDelay time.Duration
 }
 
 // Normalize 补齐缺省值，保证构造出来的调度参数一定可用。
@@ -118,11 +181,22 @@ func (cfg UpstreamCostCollectorConfig) Normalize() UpstreamCostCollectorConfig {
 		cfg.FirstDelay = 90 * time.Second
 	}
 	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 20
+		cfg.MaxAttempts = 60
 	}
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 200
 	}
+	if cfg.SweepLookback <= 0 {
+		cfg.SweepLookback = 72 * time.Hour
+	}
+	if cfg.SweepBatchSize <= 0 {
+		cfg.SweepBatchSize = 500
+	}
+	if cfg.SweepStartupDelay <= 0 {
+		cfg.SweepStartupDelay = 5 * time.Minute
+	}
+	// SweepSchedule 刻意不在这里补默认值：空串是「关闭」的显式表达，
+	// 在这里补上默认值会让「显式关掉」变得不可能。默认值由上游构造方给出。
 	return cfg
 }
 
@@ -237,6 +311,27 @@ func (s *UpstreamCostService) bumpAttempts(ctx context.Context, item *UpstreamCo
 	}
 }
 
+// RequeueExhausted 执行一次兜底补账：把窗口内「重试用尽」的记录重新排回待查队列，
+// 返回实际重排的条数。
+//
+// 刻意只「重新排队」，不在这里直接去查上游、更不手工写金额：重排之后记录会回到
+// 待查队列，由 RunOnce 用完全相同的路径重查。这里少一条并行路径，就少一处
+// 会和主流程漂移的地方——ID 校验、空值挡板、币种判定、写库时机全都只有一份实现。
+func (s *UpstreamCostService) RequeueExhausted(ctx context.Context, now time.Time) (int64, error) {
+	if s == nil || s.repo == nil {
+		return 0, nil
+	}
+	if s.cfg.SweepLookback <= 0 || s.cfg.SweepBatchSize <= 0 {
+		return 0, nil
+	}
+	// 窗口右端取 now 而不是「今天 0 点」：补账跑在清晨，此刻窗口内最新的记录是
+	// 几分钟前刚记账、还在正常重试队列里的。它们不会被误伤——SQL 里的
+	// `upstream_cost_attempts >= maxAttempts` 已经把它们挡在外面，
+	// 不需要靠时间边界去区分，也就不会因为补账时刻挪动而漏掉或误捞。
+	return s.repo.RequeueExhaustedCosts(
+		ctx, now.Add(-s.cfg.SweepLookback), now, s.cfg.MaxAttempts, s.cfg.SweepBatchSize)
+}
+
 // ==================== 后台循环 ====================
 
 // UpstreamCostCollector 周期性地把上游真实成本写回使用记录。
@@ -258,6 +353,10 @@ type UpstreamCostCollector struct {
 	started    bool
 	stopped    bool
 	instanceID string
+
+	// sweepCron 兜底补账的调度器。只在 Start 之后、且补账已启用时非 nil；
+	// 由 Stop 负责关停。受 mu 保护。
+	sweepCron *cron.Cron
 
 	// reportedNotConfigured 记录「上一轮是否因为上游凭据没配而暂停」，
 	// 用于把这一持续状态压成一次日志（见 tick 里的说明）。
@@ -301,6 +400,7 @@ func (c *UpstreamCostCollector) Start() {
 		return
 	}
 	c.started = true
+	c.startSweepCronLocked()
 	c.wg.Add(1)
 	c.mu.Unlock()
 	go c.runLoop()
@@ -318,12 +418,47 @@ func (c *UpstreamCostCollector) Stop() {
 	}
 	c.stopped = true
 	cancel := c.parentCancel
+	sweepCron := c.sweepCron
+	c.sweepCron = nil
 	c.mu.Unlock()
 
+	// 先取消再停 cron：补账执行的是一条单语句 UPDATE，PostgreSQL 侧天然原子，
+	// 中途取消不会留下半截状态。刻意不等 cron.Stop() 返回的 context——
+	// 那会把关停时间绑在一次可能正在等上游/等锁的调用上，
+	// 而补账晚一轮跑完没有任何后果。
 	if cancel != nil {
 		cancel()
 	}
+	if sweepCron != nil {
+		sweepCron.Stop()
+	}
 	c.wg.Wait()
+}
+
+// startSweepCronLocked 拉起兜底补账的 cron。调用方持锁。
+//
+// 表达式非法时只记一条日志就返回，不向上抛错：补账是一层兜底，
+// 它配错了可以接受「这层暂时不生效」，但绝不能因此把真正在干活的取数主循环拖停。
+func (c *UpstreamCostCollector) startSweepCronLocked() {
+	schedule := strings.TrimSpace(c.cfg.SweepSchedule)
+	if schedule == "" {
+		return
+	}
+	// 用进程本地时区解释 cron。容器时区已在启动日志里留痕（tz=...），
+	// 部署到 UTC 机器上时那一行会显示 tz=UTC，一眼能看出补账时刻被整体平移了。
+	loc := time.Local
+	cronSched := cron.New(cron.WithParser(upstreamCostSweepCronParser), cron.WithLocation(loc))
+	if _, err := cronSched.AddFunc(schedule, c.runSweep); err != nil {
+		logger.LegacyPrintf(upstreamCostLogComponent,
+			"upstream_cost_sweep_schedule_invalid: schedule=%q tz=%s err=%v（仅补账未启用，取数不受影响）",
+			schedule, loc.String(), err)
+		return
+	}
+	cronSched.Start()
+	c.sweepCron = cronSched
+	logger.LegacyPrintf(upstreamCostLogComponent,
+		"upstream_cost_sweep_scheduled: schedule=%q tz=%s lookback=%s batch=%d startup_delay=%s",
+		schedule, loc.String(), c.cfg.SweepLookback, c.cfg.SweepBatchSize, c.cfg.SweepStartupDelay)
 }
 
 // runLoop 是取数的调度骨架。
@@ -337,6 +472,20 @@ func (c *UpstreamCostCollector) runLoop() {
 		"upstream_cost_collector_started: instance=%s interval=%s first_delay=%s max_attempts=%d batch_size=%d",
 		c.instanceID, c.cfg.Interval, c.cfg.FirstDelay, c.cfg.MaxAttempts, c.cfg.BatchSize)
 
+	// 开机兜一次补账。cron 不会补跑错过的时刻：若停机跨过了 06:00，
+	// 那一晚的缺口要等到第二天 06:00 才被处理，白白多挂一天。
+	//
+	// 用 nil channel 表达「补账已关闭」：nil channel 上的接收永久阻塞，
+	// 于是这个分支自动失效，不需要在 select 里再加一层判断。
+	// 延迟几分钟再跑，是为了避开启动瞬间的迁移与预热，也让「刚重启完
+	// 突然涌入一大批新记录」先被主循环消化掉，不与补账抢同一批连接。
+	var startupSweep <-chan time.Time
+	if strings.TrimSpace(c.cfg.SweepSchedule) != "" {
+		startupSweepTimer := time.NewTimer(c.cfg.SweepStartupDelay)
+		defer startupSweepTimer.Stop()
+		startupSweep = startupSweepTimer.C
+	}
+
 	// 启动先跑一轮：进程重启后可能有积压，不必等第一个 tick。
 	c.tick()
 
@@ -346,10 +495,55 @@ func (c *UpstreamCostCollector) runLoop() {
 			logger.LegacyPrintf(upstreamCostLogComponent,
 				"upstream_cost_collector_stopped: instance=%s", c.instanceID)
 			return
+		case <-startupSweep:
+			c.runSweep()
 		case <-ticker.C:
 			c.tick()
 		}
 	}
+}
+
+// runSweep 执行一次兜底补账：把窗口内「重试用尽」的记录重新排回待查队列。
+//
+// 与 tick 一样先抢 leader 锁：多实例部署时只允许一个实例做这件事。
+// 抢不到不算错误——另一个实例正在做，跳过即可。
+func (c *UpstreamCostCollector) runSweep() {
+	if c.parentCtx.Err() != nil {
+		return
+	}
+	release, ok := tryAcquireSingletonLeaderLock(
+		c.parentCtx, c.lockCache, c.db, upstreamCostSweepLeaderLockKey, c.instanceID, upstreamCostLeaderLockTTL)
+	if !ok {
+		logger.LegacyPrintf(upstreamCostLogComponent,
+			"upstream_cost_sweep_skipped: reason=not_leader instance=%s", c.instanceID)
+		return
+	}
+	defer release()
+
+	start := time.Now()
+	requeued, err := c.svc.RequeueExhausted(c.parentCtx, start.UTC())
+	if err != nil {
+		if c.parentCtx.Err() != nil {
+			return
+		}
+		logger.LegacyPrintf(upstreamCostLogComponent, "upstream_cost_sweep_failed: err=%v", err)
+		return
+	}
+
+	// 这一条**不**像取数轮次那样只在「动了东西」时打：补账一天只跑一次，
+	// 而「它今天跑了、重排了 0 条」本身就是有价值的信息——主人看到的
+	// 「另有 N 条成本待反查」若长期不变，这条日志能立刻区分出
+	// 「机制没跑」和「机制跑了但账单确实取不到」。
+	//
+	// ⚠️ 与 upstream_cost_round_done 同样的约束：格式串里不能出现
+	// " failed"、"error"、"panic"、"fatal"（会被判 ERROR）或 "warn"、"fallback"
+	// （会被判 WARN）。这里全是中性词，才落在 INFO。
+	logger.LegacyPrintf(upstreamCostLogComponent,
+		"upstream_cost_sweep_done: lookback=%s window_start=%s requeued=%d elapsed=%s",
+		c.cfg.SweepLookback,
+		start.UTC().Add(-c.cfg.SweepLookback).Format(time.RFC3339),
+		requeued,
+		time.Since(start).Round(time.Millisecond))
 }
 
 // tick 执行一轮，并负责 leader 判定与错误记录。

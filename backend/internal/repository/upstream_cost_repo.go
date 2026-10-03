@@ -135,3 +135,71 @@ func (r *upstreamCostRepo) RetryUpstreamCost(ctx context.Context, usageLogID int
 	}
 	return nil
 }
+
+// upstreamCostRequeueQuery 把窗口内「重试用尽仍未取到」的记录重新排回待查队列。
+//
+// 这是状态机的第四条边。前三条边（查到 / 查了没有 / 用尽认输）都建立在
+// 「重试用尽是终局」这个假设上，而线上实测推翻了这个假设：
+// 2026-10-02 UTC 16:00~18:59 上游出现延迟尖峰，177 条里有 16 条在
+// 90s+20×30s≈11.5 分钟的预算内始终查不到；次日把 attempts 清零重排队，
+// 采集器一轮就 examined=16 resolved=16 —— 账单一直都在，只是迟到了。
+// 所以「用尽」必须可撤销，否则一次上游抖动会留下永久性的账目缺口。
+//
+// 三条闸门缺一不可：
+//   - upstream_cost_attempts >= $3：只捞已经认输的。仍在重试队列里的记录
+//     本来就还会被查，重排它们等于把已有的重试进度白白清掉。
+//   - created_at 落在 [$1, $2) 窗口内：窗口本身就是重排次数的天然上限——
+//     一条记录最多被同一个窗口扫到「窗口天数」次，之后永久出局。
+//     这是刻意不用新增计数列换来的：usage_logs 是全站最热的表，
+//     为「这条记录被补账过几次」再加一列，代价远大于收益。
+//   - LIMIT $4：封顶。某天若因异常堆积出几万条，不封顶就会在下一次补账时
+//     对上游连发几万次请求，把配额和连接一起打穿。超出的留到明天，
+//     按记账时刻升序处理，早的记录优先。
+//
+// 只清计数，绝不碰金额与 fetched_at：记录随后回到待查队列，由采集器
+// 按正常路径重查——查询、ID 校验、币种判定全部复用同一条代码路径，
+// 不产生第二条会和主流程漂移的写入口。
+const upstreamCostRequeueQuery = `
+UPDATE usage_logs
+SET upstream_cost_attempts = 0
+WHERE id IN (
+	SELECT id
+	FROM usage_logs
+	WHERE upstream_request_id IS NOT NULL
+	  AND upstream_request_id <> ''
+	  AND upstream_cost_fetched_at IS NULL
+	  AND upstream_cost_attempts >= $3
+	  AND created_at >= $1
+	  AND created_at < $2
+	ORDER BY created_at ASC
+	LIMIT $4
+)`
+
+// RequeueExhaustedCosts 实现 service.UpstreamCostRepository。
+func (r *upstreamCostRepo) RequeueExhaustedCosts(
+	ctx context.Context,
+	since time.Time,
+	until time.Time,
+	maxAttempts int,
+	limit int,
+) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, nil
+	}
+	// 参数不自洽时直接返回 0 而不是硬跑一条注定扫不到东西的语句：
+	// 窗口倒置会让 `created_at >= since AND created_at < until` 恒为假，
+	// limit<=0 会让 LIMIT 0 静默命中 0 行——两者都会伪装成「补账跑了但没东西可补」。
+	if maxAttempts <= 0 || limit <= 0 || !until.After(since) {
+		return 0, nil
+	}
+
+	res, err := r.db.ExecContext(ctx, upstreamCostRequeueQuery, since, until, maxAttempts, limit)
+	if err != nil {
+		return 0, fmt.Errorf("requeue exhausted upstream cost: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("requeue exhausted upstream cost rows: %w", err)
+	}
+	return affected, nil
+}
