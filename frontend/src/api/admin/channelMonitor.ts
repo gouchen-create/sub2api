@@ -101,6 +101,16 @@ export interface ChannelMonitor {
   check_mode: CheckMode
   /** 配额模式关联的账号 ID；探活模式为 null */
   account_id: number | null
+  /**
+   * 绑定的模型广场分组 ID（**唯一权威来源**）；null = 未绑定。
+   *
+   * 模型广场 Pro 的卡片靠它 join 出模型与定价明细。未绑定（或绑定的分组已被
+   * 删除/停用）时卡片照常渲染，只是没有模型与定价 —— 不会整行消失。
+   *
+   * 它取代了早期的三级降级猜测（account_id → group_name 同名 → 监控名同名）：
+   * 那套猜测在同名分组存在时会稳定认领到已软删的那条，使卡片显示「0 个模型」。
+   */
+  group_id: number | null
   /** 主模型最近一次配额快照（配额模式；无历史时为 null） */
   latest_quota?: MonitorQuotaSnapshot | null
 }
@@ -144,6 +154,14 @@ export interface CreateParams {
   primary_model: string
   extra_models?: string[]
   group_name?: string
+  /**
+   * 绑定的模型广场分组 ID（模型广场 Pro 卡片的分组归属只认它）。
+   *
+   * update 语义：>0 = 换绑，0 = 解绑，null/undefined = 不动（与 account_id 同构）。
+   * create 语义：>0 = 绑定；null/undefined/0 一律按「不绑定」处理 ——
+   * 后端会把 <=0 归一成未绑定，所以这里**不会**像 account_id 那样触发外键违约。
+   */
+  group_id?: number | null
   sort_order?: number
   enabled?: boolean
   interval_seconds: number

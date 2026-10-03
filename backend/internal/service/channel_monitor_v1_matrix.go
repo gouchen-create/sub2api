@@ -293,24 +293,15 @@ type ChannelMonitorV1CoverageBounds struct {
 	MaxCheckedAt time.Time
 }
 
-// ChannelMonitorV1GroupLookupKey 是「监控 → 广场分组」解析的入参。
-// AccountID 为 0 表示该监控没有关联账号（跳过第 1 级降级）。
-type ChannelMonitorV1GroupLookupKey struct {
-	MonitorID int64
-	AccountID int64
-	GroupName string
-	Name      string
-}
-
-// ChannelMonitorV1GroupCandidates 是单个监控的三级分组候选，任意一级都可能为 nil。
-type ChannelMonitorV1GroupCandidates struct {
-	// AccountGroupID 第 1 级：channel_monitors.account_id → account_groups（priority 最小者）。
-	AccountGroupID *int64
-	// GroupNameID 第 2 级：groups.name == channel_monitors.group_name（非空时）。
-	GroupNameID *int64
-	// MonitorNameID 第 3 级：groups.name == channel_monitors.name。
-	MonitorNameID *int64
-}
+// ChannelMonitorV1LiveGroupIDs 是「绑定分组当前仍可用」的判定结果集：
+// key = 分组 id；出现在集合里即表示该分组存在、未软删除且 status='active'。
+//
+// 为什么需要这一步：channel_monitors.group_id 上的外键只保证「指向的分组曾经存在」，
+// 而后台删除分组是**软删除**（写 deleted_at、status 仍可能为 active），
+// ON DELETE SET NULL 不会触发。因此读取侧必须再过滤一次
+// `deleted_at IS NULL AND status = 'active'`（与 ChannelMonitorV2 的既有做法一致），
+// 否则卡片会 join 到一个已经下线的分组、拿到空模型表。
+type ChannelMonitorV1LiveGroupIDs map[int64]struct{}
 
 // ChannelMonitorV1MatrixRepository 是 V1 矩阵专用的只读数据访问接口。
 //
@@ -334,8 +325,12 @@ type ChannelMonitorV1MatrixRepository interface {
 	LoadMonitorV1WindowCounts(ctx context.Context, monitorIDs []int64, start, end time.Time) (map[int64]ChannelMonitorV1StatusCounts, error)
 	// LoadMonitorV1Coverage 批量返回每个监控历史的最早/最晚 checked_at（无数据的监控不在 map 中）。
 	LoadMonitorV1Coverage(ctx context.Context, monitorIDs []int64) (map[int64]ChannelMonitorV1CoverageBounds, error)
-	// LoadMonitorV1GroupCandidates 一次批量查询所有监控的三级分组候选。
-	LoadMonitorV1GroupCandidates(ctx context.Context, keys []ChannelMonitorV1GroupLookupKey) (map[int64]ChannelMonitorV1GroupCandidates, error)
+	// LoadMonitorV1LiveGroupIDs 从给定的分组 id 里筛出「当前仍可用」的子集：
+	// 只保留存在、未软删除且 status='active' 的分组。入参为空时返回空集合（不发查询）。
+	//
+	// 这是「监控 → 广场分组」的**唯一**校验步骤：归属由
+	// ChannelMonitor.GroupID 直接声明，这里只判断它是否还活着，不再做任何名字猜测。
+	LoadMonitorV1LiveGroupIDs(ctx context.Context, groupIDs []int64) (ChannelMonitorV1LiveGroupIDs, error)
 }
 
 // ChannelMonitorV1EnabledMonitorReader 提供 V1 矩阵所需的启用监控清单。
@@ -357,18 +352,6 @@ func NewChannelMonitorV1MatrixService(
 	repo ChannelMonitorV1MatrixRepository,
 ) *ChannelMonitorV1MatrixService {
 	return &ChannelMonitorV1MatrixService{monitors: monitors, repo: repo}
-}
-
-// ResolveChannelMonitorV1GroupID 按三级降级返回广场分组 id，全部落空返回 nil。
-func ResolveChannelMonitorV1GroupID(candidates ChannelMonitorV1GroupCandidates) *int64 {
-	switch {
-	case candidates.AccountGroupID != nil:
-		return candidates.AccountGroupID
-	case candidates.GroupNameID != nil:
-		return candidates.GroupNameID
-	default:
-		return candidates.MonitorNameID
-	}
 }
 
 // NewEmptyChannelMonitorV1Matrix 返回 200 + 空 items 的同形响应
@@ -454,19 +437,22 @@ func (s *ChannelMonitorV1MatrixService) Matrix(
 	}
 
 	monitorIDs := make([]int64, 0, len(monitors))
-	lookupKeys := make([]ChannelMonitorV1GroupLookupKey, 0, len(monitors))
+	// 分组归属只认监控自己声明的 group_id（见 ChannelMonitor.GroupID 的注释）。
+	// 早期那套三级降级猜测（账号 → group_name 同名 → 监控名同名）已整体下线：
+	// 它在同名分组存在时会认领到已软删的那条，使卡片稳定显示「0 个模型」。
+	groupIDs := make([]int64, 0, len(monitors))
+	seenGroupID := make(map[int64]struct{}, len(monitors))
 	for _, monitor := range monitors {
-		var accountID int64
-		if monitor.AccountID != nil {
-			accountID = *monitor.AccountID
-		}
 		monitorIDs = append(monitorIDs, monitor.ID)
-		lookupKeys = append(lookupKeys, ChannelMonitorV1GroupLookupKey{
-			MonitorID: monitor.ID,
-			AccountID: accountID,
-			GroupName: monitor.GroupName,
-			Name:      monitor.Name,
-		})
+		if monitor.GroupID == nil || *monitor.GroupID <= 0 {
+			continue
+		}
+		id := *monitor.GroupID
+		if _, ok := seenGroupID[id]; ok {
+			continue
+		}
+		seenGroupID[id] = struct{}{}
+		groupIDs = append(groupIDs, id)
 	}
 
 	// 两路取数互不依赖：
@@ -484,7 +470,7 @@ func (s *ChannelMonitorV1MatrixService) Matrix(
 	if err != nil {
 		return nil, err
 	}
-	groupByMonitor, err := s.repo.LoadMonitorV1GroupCandidates(ctx, lookupKeys)
+	liveGroups, err := s.repo.LoadMonitorV1LiveGroupIDs(ctx, groupIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +483,7 @@ func (s *ChannelMonitorV1MatrixService) Matrix(
 			monitor,
 			pointsByMonitor[monitor.ID],
 			countsByMonitor[monitor.ID],
-			groupByMonitor[monitor.ID],
+			liveGroups,
 		)
 		bounds, hasData := coverageByMonitor[monitor.ID]
 		rowCoverage := channelMonitorV1MatrixCoverageFor(window, bounds, hasData)
@@ -554,7 +540,7 @@ func channelMonitorV1MatrixRow(
 	monitor *ChannelMonitor,
 	points []ChannelMonitorV1HistoryPoint,
 	counts ChannelMonitorV1StatusCounts,
-	candidates ChannelMonitorV1GroupCandidates,
+	liveGroups ChannelMonitorV1LiveGroupIDs,
 ) ChannelMonitorV2MatrixRow {
 	trend := make([]ChannelMonitorV2TrendPoint, 0, len(points))
 	var (
@@ -579,10 +565,15 @@ func channelMonitorV1MatrixRow(
 		pointLatencyCnt += latencyCnt
 	}
 
+	// 分组归属只有一个来源：监控自己绑定的 group_id —— 不再猜名字。
+	// 未绑定、或绑定的分组已被删除/停用 → group_id 留空；卡片照常渲染，
+	// 只是没有模型与定价明细（前端既有的降级行为，不会整行消失）。
 	var groupID *int64
-	if resolved := ResolveChannelMonitorV1GroupID(candidates); resolved != nil {
-		id := *resolved
-		groupID = &id
+	if monitor.GroupID != nil && *monitor.GroupID > 0 {
+		if _, alive := liveGroups[*monitor.GroupID]; alive {
+			id := *monitor.GroupID
+			groupID = &id
+		}
 	}
 
 	return ChannelMonitorV2MatrixRow{

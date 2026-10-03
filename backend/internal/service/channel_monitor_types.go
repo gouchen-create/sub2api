@@ -55,6 +55,16 @@ type ChannelMonitor struct {
 	CheckMode string // probe（默认）/ quota / quota_probe；空串按 probe 处理
 	AccountID *int64 // 关联账号 ID；账号删除后被 DB 置空（监控保留并报「账号未关联」）
 
+	// GroupID 是该监控在「模型广场」里代表哪个分组 —— **唯一权威来源**。
+	//
+	// 它取代了早期的三级降级猜测（account_id → account_groups ＞ group_name 同名
+	// ＞ 监控名同名）：那套猜测在同名分组存在时会认领到已软删的那条，使模型广场 Pro
+	// 的卡片显示「0 个模型」。现在起「选谁就是谁」。
+	//
+	// ⚠️ 硬删除分组时由 DB 置空（ON DELETE SET NULL）；**软删除不会触发**，
+	// 因此读取侧仍须过滤 `deleted_at IS NULL AND status = 'active'`。
+	GroupID *int64
+
 	// 请求自定义快照（来自模板拷贝 or 用户手填，运行时直接读取）
 	TemplateID       *int64            // 仅用于 UI 分组 + 一键应用，运行时不用
 	ExtraHeaders     map[string]string // 与 adapter 默认 headers 合并，用户优先
@@ -104,6 +114,10 @@ type ChannelMonitorCreateParams struct {
 	// 配额模式：CheckMode 空串默认 probe；quota/quota_probe 必须关联账号。
 	CheckMode string
 	AccountID *int64
+
+	// GroupID：绑定的模型广场分组；nil 或 <= 0 表示不绑定（卡片照常显示，
+	// 只是没有模型与定价明细）。存在性由数据库外键保证（migration 249）。
+	GroupID *int64
 }
 
 // ChannelMonitorUpdateParams 更新参数（指针字段表示"未提供则不更新"）。
@@ -133,6 +147,10 @@ type ChannelMonitorUpdateParams struct {
 	// 指向 0 = 清空关联（退回 probe 模式时由 CheckMode 分支兜底）。
 	CheckMode *string
 	AccountID *int64
+
+	// GroupID 同样用「指向 0 = 清空」的三态表达：
+	// nil = 不更新；> 0 = 绑定到该分组；<= 0 = 清空绑定。
+	GroupID *int64
 }
 
 // CheckResult 单个模型一次检测的结果。

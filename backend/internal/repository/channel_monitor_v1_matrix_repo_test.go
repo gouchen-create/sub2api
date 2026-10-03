@@ -159,66 +159,46 @@ func TestChannelMonitorV1MatrixLoadCoverage(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestChannelMonitorV1MatrixLoadGroupCandidates 验证三级降级的候选解包
-// （NULL → nil 指针），优先级排序由 service 层 ResolveChannelMonitorV1GroupID 决定。
-func TestChannelMonitorV1MatrixLoadGroupCandidates(t *testing.T) {
+// TestChannelMonitorV1MatrixLoadLiveGroupIDs 验证「绑定分组是否仍在架」的过滤结果。
+//
+// 这条查询取代了早期的三级降级候选：现在归属由 channel_monitors.group_id 直接声明，
+// 仓储只负责回答「它指向的分组还活着吗」—— 未软删除且 status='active' 才算活着。
+func TestChannelMonitorV1MatrixLoadLiveGroupIDs(t *testing.T) {
 	repo, mock := newChannelMonitorV1MatrixRepo(t)
-	keys := []service.ChannelMonitorV1GroupLookupKey{
-		{MonitorID: 1, AccountID: 42, GroupName: "g", Name: "n1"},
-		{MonitorID: 2, GroupName: "g", Name: "n2"},
-		{MonitorID: 3, Name: "n3"},
-		{MonitorID: 4, Name: "n4"},
-	}
 
-	mock.ExpectQuery(channelMonitorV1MatrixGroupCandidatesSQL).
-		WithArgs(
-			pq.Array([]int64{1, 2, 3, 4}),
-			pq.Array([]int64{42, 0, 0, 0}),
-			pq.Array([]string{"g", "g", "", ""}),
-			pq.Array([]string{"n1", "n2", "n3", "n4"}),
-		).
-		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "group_id", "id", "id"}).
-			AddRow(int64(1), int64(5), int64(9), int64(11)).
-			AddRow(int64(2), nil, int64(9), int64(11)).
-			AddRow(int64(3), nil, nil, int64(11)).
-			AddRow(int64(4), nil, nil, nil))
+	mock.ExpectQuery(channelMonitorV1MatrixLiveGroupIDsSQL).
+		WithArgs(pq.Array([]int64{5, 9, 37})).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).
+			AddRow(int64(5)).
+			AddRow(int64(37)))
 
-	out, err := repo.LoadMonitorV1GroupCandidates(context.Background(), keys)
+	out, err := repo.LoadMonitorV1LiveGroupIDs(context.Background(), []int64{5, 9, 37})
 	require.NoError(t, err)
-	require.Len(t, out, 4)
-
-	require.NotNil(t, out[1].AccountGroupID)
-	require.EqualValues(t, 5, *out[1].AccountGroupID)
-	require.NotNil(t, out[1].GroupNameID)
-	require.EqualValues(t, 9, *out[1].GroupNameID)
-	require.NotNil(t, out[1].MonitorNameID)
-	require.EqualValues(t, 11, *out[1].MonitorNameID)
-
-	require.Nil(t, out[2].AccountGroupID)
-	require.NotNil(t, out[2].GroupNameID)
-
-	require.Nil(t, out[3].AccountGroupID)
-	require.Nil(t, out[3].GroupNameID)
-	require.NotNil(t, out[3].MonitorNameID)
-
-	require.Nil(t, out[4].AccountGroupID)
-	require.Nil(t, out[4].GroupNameID)
-	require.Nil(t, out[4].MonitorNameID)
+	// 9 已删除/停用 → 不在集合里；调用方据此把该行的 group_id 留空。
+	require.Len(t, out, 2)
+	_, ok := out[5]
+	require.True(t, ok)
+	_, ok = out[37]
+	require.True(t, ok)
+	_, ok = out[9]
+	require.False(t, ok)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestChannelMonitorV1MatrixLoadGroupCandidatesSkipsQueryWithoutKeys(t *testing.T) {
+func TestChannelMonitorV1MatrixLoadLiveGroupIDsSkipsQueryWithoutIDs(t *testing.T) {
 	repo, mock := newChannelMonitorV1MatrixRepo(t)
-	out, err := repo.LoadMonitorV1GroupCandidates(context.Background(), nil)
+	out, err := repo.LoadMonitorV1LiveGroupIDs(context.Background(), nil)
 	require.NoError(t, err)
 	require.Empty(t, out)
+	// 入参为空必须短路，不能发出 `= ANY('{}')` 这种无意义查询。
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestChannelMonitorV1MatrixSQLContract 钉住四条 SQL 的关键语义：
 // 探测明细直出（一次探测一行、不做时间分桶聚合）+ **每个监控只取最新的 N 条**、
 // 窗口内 4 态计数单独一条 SQL（**只有它**带 checked_at 过滤）、
-// 按监控批量（无 N+1）、三级降级优先级在 SQL 侧（每级 LIMIT 1 防重名放大行数）。
+// 按监控批量（无 N+1）、而「绑定分组是否仍在架」用一条**纯 id 集合**查询
+// （不再有任何按名字猜的痕迹）—— 后面这段是本文件最重要的一道防回归闸门。
 //
 // ⚠️ 两条口径必须严格分离（主人明确要求）：
 // 柱子 = 最近 N 次探测，**与时间档位无关** → points SQL 里不允许出现任何 checked_at 过滤，
@@ -268,15 +248,25 @@ func TestChannelMonitorV1MatrixSQLContract(t *testing.T) {
 	require.Contains(t, coverage, "max(checked_at)")
 	require.Contains(t, coverage, "monitor_id = any($1)")
 
-	candidates := strings.ToLower(channelMonitorV1MatrixGroupCandidatesSQL)
-	require.Contains(t, candidates, "from account_groups ag")
-	require.Contains(t, candidates, "order by ag.priority asc, ag.group_id asc")
-	require.Contains(t, candidates, "from groups g")
-	require.Contains(t, candidates, "g.name = mk.group_name")
-	require.Contains(t, candidates, "g.name = mk.monitor_name")
-	require.Contains(t, candidates, "mk.group_name <> ''")
-	// 三级各一个 LATERAL，且都带 LIMIT 1：避免 groups.name 重名把行数放大。
-	require.Equal(t, 3, strings.Count(candidates, "left join lateral"))
-	require.Equal(t, 3, strings.Count(candidates, "limit 1"))
-	require.Contains(t, candidates, "unnest($1::bigint[])")
+	// 「监控 → 广场分组」的解析已整体重写：归属由 channel_monitors.group_id
+	// 直接声明，仓储只判断「绑定的分组还在不在架」。
+	//
+	// ⚠️ 下面这组 NotContains 是**防回归闸门**，不是凑数：
+	// 早期实现靠三级降级猜名字（account_groups ＞ group_name 同名 ＞ 监控名同名），
+	// 两级同名匹配遇到「删掉旧分组又建同名新分组」时会稳定认领到已软删的那条，
+	// 使模型广场 Pro 的卡片显示「0 个模型」。只要谁把这些痕迹加回来，测试立刻红。
+	surviving := strings.ToLower(channelMonitorV1MatrixLiveGroupIDsSQL)
+	require.Contains(t, surviving, "from groups")
+	require.Contains(t, surviving, "id = any($1::bigint[])")
+	// 在架判定必须与 ChannelMonitorV2 完全一致：软删除或停用都算「不可用」。
+	// 少了这两条，卡片就会 join 到一个已下线的分组、拿到空模型表。
+	require.Contains(t, surviving, "deleted_at is null")
+	require.Contains(t, surviving, "status = 'active'")
+	// 猜测逻辑的全部痕迹都不允许回来：
+	require.NotContains(t, surviving, "group_name", "自由文本分组名标签不得再参与归属判定")
+	require.NotContains(t, surviving, "monitor_name", "监控名不得再参与归属判定")
+	require.NotContains(t, surviving, "account_groups", "关联账号不得再参与归属判定")
+	require.NotContains(t, surviving, "left join lateral")
+	require.NotContains(t, surviving, "limit 1", "不再需要防重名的 LIMIT 1：按 id 直查不会放大行数")
+	require.NotContains(t, surviving, "unnest(")
 }

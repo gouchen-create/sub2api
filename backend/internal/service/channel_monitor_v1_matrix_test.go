@@ -31,7 +31,7 @@ type channelMonitorV1MatrixRepoStub struct {
 	points     map[int64][]ChannelMonitorV1HistoryPoint
 	counts     map[int64]ChannelMonitorV1StatusCounts
 	coverage   map[int64]ChannelMonitorV1CoverageBounds
-	candidates map[int64]ChannelMonitorV1GroupCandidates
+	liveGroups ChannelMonitorV1LiveGroupIDs
 
 	pointCalls      int
 	pointMonitorIDs []int64
@@ -41,6 +41,9 @@ type channelMonitorV1MatrixRepoStub struct {
 	countMonitorIDs []int64
 	countStart      time.Time
 	countEnd        time.Time
+
+	groupCalls    int
+	groupGroupIDs []int64
 }
 
 func (s *channelMonitorV1MatrixRepoStub) LoadMonitorV1RecentPoints(
@@ -70,11 +73,13 @@ func (s *channelMonitorV1MatrixRepoStub) LoadMonitorV1Coverage(
 	return s.coverage, nil
 }
 
-func (s *channelMonitorV1MatrixRepoStub) LoadMonitorV1GroupCandidates(
+func (s *channelMonitorV1MatrixRepoStub) LoadMonitorV1LiveGroupIDs(
 	_ context.Context,
-	_ []ChannelMonitorV1GroupLookupKey,
-) (map[int64]ChannelMonitorV1GroupCandidates, error) {
-	return s.candidates, nil
+	groupIDs []int64,
+) (ChannelMonitorV1LiveGroupIDs, error) {
+	s.groupCalls++
+	s.groupGroupIDs = groupIDs
+	return s.liveGroups, nil
 }
 
 // channelMonitorV1MatrixLatency 构造一次探测的延迟样本指针（LatencyMs 是可空字段）。
@@ -530,61 +535,101 @@ func TestChannelMonitorV1MatrixRedactsVolumeForOrdinaryUsers(t *testing.T) {
 	require.Equal(t, "warning", user.Items[0].Health.Overall, "有 degraded → warning")
 }
 
-// ---------- 7. 分组三级降级 ----------
+// ---------- 7. 分组归属：只认显式绑定的 group_id ----------
 
-func TestResolveChannelMonitorV1GroupIDPriority(t *testing.T) {
-	id3, id5, id7 := int64(3), int64(5), int64(7)
-
-	// account_id 命中的优先级最高（即便同名分组也命中）。
-	require.Equal(t, &id3, ResolveChannelMonitorV1GroupID(ChannelMonitorV1GroupCandidates{
-		AccountGroupID: &id3, GroupNameID: &id5, MonitorNameID: &id7,
-	}))
-	// 无账号 → group_name 精确匹配。
-	require.Equal(t, &id5, ResolveChannelMonitorV1GroupID(ChannelMonitorV1GroupCandidates{
-		GroupNameID: &id5, MonitorNameID: &id7,
-	}))
-	// 前两级都落空 → 监控名精确匹配。
-	require.Equal(t, &id7, ResolveChannelMonitorV1GroupID(ChannelMonitorV1GroupCandidates{
-		MonitorNameID: &id7,
-	}))
-	// 三级全落空 → 不带 group_id（JSON 里整个字段省略）。
-	require.Nil(t, ResolveChannelMonitorV1GroupID(ChannelMonitorV1GroupCandidates{}))
-}
-
-// TestChannelMonitorV1MatrixRowPrefersAccountGroupOverSameName 端到端验证降级优先级体现在行上。
-func TestChannelMonitorV1MatrixRowPrefersAccountGroupOverSameName(t *testing.T) {
+// TestChannelMonitorV1MatrixRowUsesBoundGroupIDOnly 钉住「不再猜名字」这条新口径。
+//
+// 旧实现按三级降级猜（account_id → group_name 同名 → 监控名同名），
+// 在同名分组存在时会稳定认领到已软删的那条，使模型广场 Pro 的卡片显示「0 个模型」。
+// 现在归属完全由 ChannelMonitor.GroupID 决定：监控名、自由文本分组名标签、
+// 关联账号都无权影响它；绑定到已删除/已停用的分组时 group_id 必须留空
+// （卡片照常渲染，只是没有模型与定价明细，不会整行消失）。
+func TestChannelMonitorV1MatrixRowUsesBoundGroupIDOnly(t *testing.T) {
 	window := mustChannelMonitorV1MatrixWindow(t, "30m-1m")
 	accountID := int64(42)
+	boundAlive := int64(5) // 绑定且分组仍在架
+	boundDead := int64(9)  // 绑定但分组已删除/停用
+	boundZero := int64(0)  // 非法值，视为未绑定
 	monitors := []*ChannelMonitor{
-		{ID: 1, Name: "同名分组渠道", Provider: "openai", AccountID: &accountID, GroupName: "同名分组", SortOrder: 1},
-		{ID: 2, Name: "只按监控名", Provider: "grok", GroupName: "不存在的分组名", SortOrder: 2},
-		{ID: 3, Name: "无法解析", Provider: "gemini", SortOrder: 3},
+		// 故意带上 account_id 与同名 group_name 标签，验证它们都不再参与归属判定。
+		{ID: 1, Name: "同名分组渠道", Provider: "openai", AccountID: &accountID, GroupName: "同名分组", GroupID: &boundAlive, SortOrder: 1},
+		{ID: 2, Name: "绑到已删除分组", Provider: "grok", GroupID: &boundDead, SortOrder: 2},
+		{ID: 3, Name: "没绑定", Provider: "gemini", SortOrder: 3},
+		{ID: 4, Name: "绑了非法值", Provider: "anthropic", GroupID: &boundZero, SortOrder: 4},
 	}
-	id9, id5 := int64(9), int64(5)
 	repo := &channelMonitorV1MatrixRepoStub{
-		candidates: map[int64]ChannelMonitorV1GroupCandidates{
-			1: {AccountGroupID: &id5, GroupNameID: &id9}, // 账号命中的 5 优先于同名的 9
-			2: {MonitorNameID: &id9},                     // 第 3 级
-			3: {},                                        // 全部落空
-		},
+		liveGroups: ChannelMonitorV1LiveGroupIDs{5: {}},
 	}
 	svc := NewChannelMonitorV1MatrixService(&channelMonitorV1MatrixMonitorsStub{monitors: monitors}, repo)
 
 	matrix, err := svc.Matrix(context.Background(), window, true)
 	require.NoError(t, err)
-	require.Len(t, matrix.Items, 3)
+	require.Len(t, matrix.Items, 4)
 
 	require.Equal(t, ChannelMonitorV2GroupByPlatformGroup, matrix.GroupBy)
+
+	// 只把「实际绑定过的、去重后的」分组 id 送去查存活：5 与 9，
+	// 0 在入参构造阶段就被拦下（<= 0 一律视为未绑定）。
+	require.ElementsMatch(t, []int64{5, 9}, repo.groupGroupIDs)
+
 	require.NotNil(t, matrix.Items[0].GroupID)
 	require.EqualValues(t, 5, *matrix.Items[0].GroupID)
 	require.Equal(t, "同名分组渠道", matrix.Items[0].GroupName)
 	require.Equal(t, "openai", matrix.Items[0].Platform)
 	require.Empty(t, matrix.Items[0].Model, "V1 一行一个监控，model 留空")
 
-	require.NotNil(t, matrix.Items[1].GroupID)
-	require.EqualValues(t, 9, *matrix.Items[1].GroupID)
+	require.Nil(t, matrix.Items[1].GroupID, "绑定的分组已删除/停用 → 必须留空，而不是照抄 group_id")
+	require.Nil(t, matrix.Items[2].GroupID, "未绑定 → nil（字段省略）")
+	require.Nil(t, matrix.Items[3].GroupID, "<= 0 视为未绑定")
+}
 
-	require.Nil(t, matrix.Items[2].GroupID, "三级全落空时 group_id 必须为 nil（字段省略）")
+// TestChannelMonitorV1MatrixRowDedupesGroupIDLookup 验证同一分组被多个监控绑定时
+// 只向仓储查一次（按 id 去重），避免 N+1 与重复入参。
+func TestChannelMonitorV1MatrixRowDedupesGroupIDLookup(t *testing.T) {
+	window := mustChannelMonitorV1MatrixWindow(t, "30m-1m")
+	shared := int64(7)
+	other := int64(8)
+	monitors := []*ChannelMonitor{
+		{ID: 1, Name: "a", Provider: "openai", GroupID: &shared, SortOrder: 1},
+		{ID: 2, Name: "b", Provider: "grok", GroupID: &shared, SortOrder: 2},
+		{ID: 3, Name: "c", Provider: "gemini", GroupID: &other, SortOrder: 3},
+	}
+	repo := &channelMonitorV1MatrixRepoStub{
+		liveGroups: ChannelMonitorV1LiveGroupIDs{7: {}, 8: {}},
+	}
+	svc := NewChannelMonitorV1MatrixService(&channelMonitorV1MatrixMonitorsStub{monitors: monitors}, repo)
+
+	matrix, err := svc.Matrix(context.Background(), window, true)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, repo.groupCalls, "一次批量查询，不引入 N+1")
+	require.Len(t, repo.groupGroupIDs, 2, "7 被两个监控共用，只应出现一次")
+	require.ElementsMatch(t, []int64{7, 8}, repo.groupGroupIDs)
+
+	for i, want := range []int64{7, 7, 8} {
+		require.NotNil(t, matrix.Items[i].GroupID)
+		require.EqualValues(t, want, *matrix.Items[i].GroupID)
+	}
+}
+
+// TestChannelMonitorV1MatrixNoBoundGroupSkipsLookup 验证「一个都没绑定」时
+// 完全不查存活表（入参为空直接短路）。
+func TestChannelMonitorV1MatrixNoBoundGroupSkipsLookup(t *testing.T) {
+	window := mustChannelMonitorV1MatrixWindow(t, "30m-1m")
+	monitors := []*ChannelMonitor{
+		{ID: 1, Name: "a", Provider: "openai", SortOrder: 1},
+		{ID: 2, Name: "b", Provider: "grok", SortOrder: 2},
+	}
+	repo := &channelMonitorV1MatrixRepoStub{}
+	svc := NewChannelMonitorV1MatrixService(&channelMonitorV1MatrixMonitorsStub{monitors: monitors}, repo)
+
+	matrix, err := svc.Matrix(context.Background(), window, true)
+	require.NoError(t, err)
+
+	require.Empty(t, repo.groupGroupIDs, "没有任何绑定 → 入参为空，仓储侧短路")
+	for _, item := range matrix.Items {
+		require.Nil(t, item.GroupID)
+	}
 }
 
 // ---------- 8. coverage ----------

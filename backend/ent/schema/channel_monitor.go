@@ -52,6 +52,20 @@ func (ChannelMonitor) Fields() []ent.Field {
 		field.Int64("account_id").
 			Optional().
 			Nillable(),
+		// group_id: 该监控在「模型广场」里代表哪个分组（**唯一权威来源**）。
+		//
+		// 普通字段而非 edge（FK 由 SQL 迁移 249 管理），与上面的 account_id 同构。
+		// 历史包袱：在加这一列之前，「监控 → 分组」只能靠三级降级猜
+		// （account_id → account_groups ＞ group_name 同名 ＞ 监控名同名），
+		// 而两级同名匹配遇到「删旧建新」留下的同名记录时会认领到已软删的那条，
+		// 使模型广场 Pro 的卡片显示「0 个模型」。本列落地后猜测逻辑已整体下线。
+		//
+		// ⚠️ 硬删除分组时由 DB 置空（ON DELETE SET NULL）；**软删除不会触发**，
+		// 因此读取侧必须同时过滤 `deleted_at IS NULL AND status = 'active'`
+		// （与 ChannelMonitorV2 的既有做法一致）。
+		field.Int64("group_id").
+			Optional().
+			Nillable(),
 		field.String("api_mode").
 			Default("chat_completions").
 			MaxLen(32).
@@ -137,5 +151,6 @@ func (ChannelMonitor) Indexes() []ent.Index {
 		index.Fields("group_name"),
 		index.Fields("template_id"),
 		index.Fields("account_id"),
+		index.Fields("group_id"),
 	}
 }

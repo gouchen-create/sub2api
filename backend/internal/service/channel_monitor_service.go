@@ -187,6 +187,7 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 		BodyOverride:     p.BodyOverride,
 		CheckMode:        checkMode,
 		AccountID:        cloneInt64Pointer(p.AccountID),
+		GroupID:          normalizeMonitorGroupID(p.GroupID),
 	}
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, fmt.Errorf("create channel monitor: %w", err)
@@ -254,6 +255,7 @@ func (s *ChannelMonitorService) Duplicate(
 		BodyOverride:         bodyOverride,
 		CheckMode:            defaultCheckMode(source.CheckMode),
 		AccountID:            cloneInt64Pointer(source.AccountID),
+		GroupID:              cloneInt64Pointer(source.GroupID),
 		DuplicateOperationID: operationID,
 	}
 	if err := s.repo.Create(ctx, duplicate); err != nil {
@@ -343,6 +345,22 @@ func cloneInt64Pointer(value *int64) *int64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+// normalizeMonitorGroupID 把「未提供」与「<= 0」统一收敛成 nil（= 不绑定分组），
+// 只有 > 0 才视为有效绑定。与 ChannelMonitorUpdateParams.GroupID 的三态约定一致：
+// nil = 不更新（由调用方提前拦截）、> 0 = 绑定、<= 0 = 清空。
+//
+// 这里不做「分组是否存在」的校验：存在性由数据库外键保证
+// （见 migration 249），而「分组是否已软删除」由读取侧过滤
+// （deleted_at IS NULL AND status = 'active'），两层兜底比在 service 层
+// 再引一个分组仓储更轻——后者会牵动 wire 装配，扩大改动面。
+func normalizeMonitorGroupID(groupID *int64) *int64 {
+	if groupID == nil || *groupID <= 0 {
+		return nil
+	}
+	id := *groupID
+	return &id
 }
 
 func cloneChannelMonitorHeaders(source map[string]string) map[string]string {
@@ -943,6 +961,10 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 		} else {
 			existing.AccountID = nil // 0 = 清空关联
 		}
+	}
+	// 与 AccountID 同构的三态：nil = 不更新；> 0 = 绑定；<= 0 = 清空绑定。
+	if p.GroupID != nil {
+		existing.GroupID = normalizeMonitorGroupID(p.GroupID)
 	}
 	if p.Endpoint != nil {
 		// quota 模式允许清空 endpoint（校验由 validateMonitorModeFields 兜底）。

@@ -199,102 +199,49 @@ func (r *channelMonitorV1MatrixRepository) LoadMonitorV1Coverage(
 	return out, nil
 }
 
-// channelMonitorV1MatrixGroupCandidatesSQL 一次性为所有监控解析「监控 → 广场分组」的三级候选。
+// channelMonitorV1MatrixLiveGroupIDsSQL 从给定分组 id 里筛出「当前仍可用」的那些。
 //
-// 每个监控最多返回 3 列候选，优先级由 service 层按 COALESCE 顺序决定
-// （account_id → groups.name == channel_monitors.group_name → groups.name == channel_monitors.name）：
-//   - 第 1 级经 account_groups 取该账号 priority 最小（并列取 group_id 最小）的分组；
-//   - 第 2/3 级按名字精确匹配，并列取 id 最小，避免 groups.name 重名产生重复行。
+// 判定口径与 ChannelMonitorV2 完全一致（`deleted_at IS NULL AND status = 'active'`），
+// 这是刻意的：V1 与 V2 只是取数方式不同，对「一个分组算不算在架」的定义必须一致，
+// 否则同一张卡片在两种模式下会得出不同结论。
 //
-// 三个 LATERAL 子查询都带 LIMIT 1，因此结果行数恒等于入参监控数（每个监控恰好一行）。
-// 用 unnest 数组把入参做成 CTE，仍是「一次批量查询」，不引入 N+1。
-const channelMonitorV1MatrixGroupCandidatesSQL = `
-WITH monitor_keys AS (
-    SELECT unnest($1::bigint[]) AS monitor_id,
-           unnest($2::bigint[]) AS account_id,
-           unnest($3::text[])   AS group_name,
-           unnest($4::text[])   AS monitor_name
-)
-SELECT mk.monitor_id,
-       account_group.group_id,
-       group_name_group.id,
-       monitor_name_group.id
-FROM monitor_keys mk
-LEFT JOIN LATERAL (
-    SELECT ag.group_id
-    FROM account_groups ag
-    WHERE mk.account_id > 0
-      AND ag.account_id = mk.account_id
-    ORDER BY ag.priority ASC, ag.group_id ASC
-    LIMIT 1
-) account_group ON TRUE
-LEFT JOIN LATERAL (
-    SELECT g.id
-    FROM groups g
-    WHERE mk.group_name <> ''
-      AND g.name = mk.group_name
-    ORDER BY g.id ASC
-    LIMIT 1
-) group_name_group ON TRUE
-LEFT JOIN LATERAL (
-    SELECT g.id
-    FROM groups g
-    WHERE g.name = mk.monitor_name
-    ORDER BY g.id ASC
-    LIMIT 1
-) monitor_name_group ON TRUE
-ORDER BY mk.monitor_id
+// 为什么不能只靠外键：channel_monitors.group_id 上的外键只覆盖**硬删除**，
+// 而后台删除分组写的是 deleted_at（软删除），ON DELETE SET NULL 不会触发。
+// 少了这道过滤，卡片就会 join 到一个已下线的分组、拿到空模型表。
+const channelMonitorV1MatrixLiveGroupIDsSQL = `
+SELECT id
+FROM groups
+WHERE id = ANY($1::bigint[])
+  AND deleted_at IS NULL
+  AND status = 'active'
 `
 
-// LoadMonitorV1GroupCandidates 返回 map[monitorID] -> 三级分组候选（各级可能为 nil）。
-func (r *channelMonitorV1MatrixRepository) LoadMonitorV1GroupCandidates(
+// LoadMonitorV1LiveGroupIDs 返回给定分组 id 中「仍然可用」的子集。
+//
+// 取代了早期的 LoadMonitorV1GroupCandidates：那时要传监控 id、账号 id、分组名标签、
+// 监控名四列去做三级降级匹配，现在归属由 channel_monitors.group_id 直接声明，
+// 这里只负责回答「它绑定分组的还活着吗」。入参为空时直接返回空集合，不发查询。
+func (r *channelMonitorV1MatrixRepository) LoadMonitorV1LiveGroupIDs(
 	ctx context.Context,
-	keys []service.ChannelMonitorV1GroupLookupKey,
-) (map[int64]service.ChannelMonitorV1GroupCandidates, error) {
-	out := make(map[int64]service.ChannelMonitorV1GroupCandidates, len(keys))
-	if len(keys) == 0 {
+	groupIDs []int64,
+) (service.ChannelMonitorV1LiveGroupIDs, error) {
+	out := make(service.ChannelMonitorV1LiveGroupIDs, len(groupIDs))
+	if len(groupIDs) == 0 {
 		return out, nil
 	}
-	monitorIDs := make([]int64, 0, len(keys))
-	accountIDs := make([]int64, 0, len(keys))
-	groupNames := make([]string, 0, len(keys))
-	monitorNames := make([]string, 0, len(keys))
-	for _, key := range keys {
-		monitorIDs = append(monitorIDs, key.MonitorID)
-		accountIDs = append(accountIDs, key.AccountID)
-		groupNames = append(groupNames, key.GroupName)
-		monitorNames = append(monitorNames, key.Name)
-	}
 
-	rows, err := r.db.QueryContext(
-		ctx,
-		channelMonitorV1MatrixGroupCandidatesSQL,
-		pq.Array(monitorIDs),
-		pq.Array(accountIDs),
-		pq.Array(groupNames),
-		pq.Array(monitorNames),
-	)
+	rows, err := r.db.QueryContext(ctx, channelMonitorV1MatrixLiveGroupIDsSQL, pq.Array(groupIDs))
 	if err != nil {
-		return nil, fmt.Errorf("query channel monitor v1 matrix group candidates: %w", err)
+		return nil, fmt.Errorf("query channel monitor v1 matrix live group ids: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
-		var (
-			monitorID int64
-			account   sql.NullInt64
-			byGroup   sql.NullInt64
-			byMonitor sql.NullInt64
-		)
-		if err := rows.Scan(&monitorID, &account, &byGroup, &byMonitor); err != nil {
-			return nil, fmt.Errorf("scan channel monitor v1 matrix group candidate: %w", err)
+		var groupID int64
+		if err := rows.Scan(&groupID); err != nil {
+			return nil, fmt.Errorf("scan channel monitor v1 matrix live group id: %w", err)
 		}
-		candidates := service.ChannelMonitorV1GroupCandidates{
-			AccountGroupID: nullInt64Pointer(account),
-			GroupNameID:    nullInt64Pointer(byGroup),
-			MonitorNameID:  nullInt64Pointer(byMonitor),
-		}
-		out[monitorID] = candidates
+		out[groupID] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

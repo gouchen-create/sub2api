@@ -84,7 +84,7 @@ type channelMonitorV1MatrixHandlerRepoStub struct {
 	points     map[int64][]service.ChannelMonitorV1HistoryPoint
 	counts     map[int64]service.ChannelMonitorV1StatusCounts
 	coverage   map[int64]service.ChannelMonitorV1CoverageBounds
-	candidates map[int64]service.ChannelMonitorV1GroupCandidates
+	liveGroups service.ChannelMonitorV1LiveGroupIDs
 }
 
 func (s *channelMonitorV1MatrixHandlerRepoStub) LoadMonitorV1RecentPoints(
@@ -113,11 +113,11 @@ func (s *channelMonitorV1MatrixHandlerRepoStub) LoadMonitorV1Coverage(
 	return s.coverage, nil
 }
 
-func (s *channelMonitorV1MatrixHandlerRepoStub) LoadMonitorV1GroupCandidates(
+func (s *channelMonitorV1MatrixHandlerRepoStub) LoadMonitorV1LiveGroupIDs(
 	_ context.Context,
-	_ []service.ChannelMonitorV1GroupLookupKey,
-) (map[int64]service.ChannelMonitorV1GroupCandidates, error) {
-	return s.candidates, nil
+	_ []int64,
+) (service.ChannelMonitorV1LiveGroupIDs, error) {
+	return s.liveGroups, nil
 }
 
 // ---------- 响应解析 ----------
@@ -259,11 +259,13 @@ func TestChannelMonitorV1MatrixHandlerRejectsUnsupportedGroupBy(t *testing.T) {
 
 func TestChannelMonitorV1MatrixHandlerHappyPath(t *testing.T) {
 	accountID := int64(42)
+	// 故意同时带上 account_id 与自由文本 group_name 标签：它们**都不再参与**
+	// 分组归属判定，只有显式绑定的 GroupID 说了算（旧的三级降级猜测已下线）。
+	groupID := int64(7)
 	monitors := &channelMonitorV1MatrixHandlerMonitorsStub{monitors: []*service.ChannelMonitor{
-		{ID: 1, Name: "GPT 主力渠道", Provider: "openai", AccountID: &accountID, GroupName: "主力分组", SortOrder: 1},
+		{ID: 1, Name: "GPT 主力渠道", Provider: "openai", AccountID: &accountID, GroupName: "主力分组", GroupID: &groupID, SortOrder: 1},
 		{ID: 2, Name: "Grok 备用渠道", Provider: "grok", SortOrder: 2},
 	}}
-	groupID := int64(7)
 	now := time.Now().UTC()
 	// 4 次真实探测：3 次 operational + 1 次 degraded。行级口径（**degraded 算成功**）：
 	// sample=4、success_rate=1.0、score=100；但档位仍然是 health=warning
@@ -287,10 +289,8 @@ func TestChannelMonitorV1MatrixHandlerHappyPath(t *testing.T) {
 		coverage: map[int64]service.ChannelMonitorV1CoverageBounds{
 			1: {MinCheckedAt: now.Add(-2 * time.Hour), MaxCheckedAt: now.Add(-30 * time.Second)},
 		},
-		candidates: map[int64]service.ChannelMonitorV1GroupCandidates{
-			1: {AccountGroupID: &groupID},
-			2: {},
-		},
+		// 只需声明「id=7 这个分组仍在架」；归属本身来自监控的 GroupID。
+		liveGroups: service.ChannelMonitorV1LiveGroupIDs{7: {}},
 	}
 	h := NewChannelMonitorV1MatrixHandler(
 		service.NewChannelMonitorV1MatrixService(monitors, repo),
