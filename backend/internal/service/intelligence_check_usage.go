@@ -56,6 +56,8 @@ type intelligenceCheckUpstreamCapture struct {
 	// firstContentAt 是首个 content 事件到达的时刻（只记第一次）。
 	// 智力检测是流式跑测，用它算「首字」；非流式跑测不采信（那只是响应结束时刻）。
 	firstContentAt time.Time
+	// usage 是上游响应里解析出的 token 用量（输入/输出/缓存），记账行填写。
+	usage ProbeUsageTokens
 }
 
 // withIntelligenceCheckUpstreamCapture 把捕获器挂到本次跑测的 gin.Context 上。
@@ -157,6 +159,28 @@ func (c *intelligenceCheckUpstreamCapture) firstContentTimestamp() time.Time {
 	return c.firstContentAt
 }
 
+// markIntelligenceCheckUsage 由各平台解析器在解出一段上游 JSON 后调用。
+// 与首字钩子同样只对装了捕获器的智力检测跑测生效，官方测试路径恒为空操作。
+func markIntelligenceCheckUsage(c *gin.Context, obj map[string]any) {
+	capture := intelligenceCheckUpstreamCaptureFrom(c)
+	if capture == nil || len(obj) == 0 {
+		return
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	captureProbeUsage(&capture.usage, obj)
+}
+
+// usageSnapshot 返回本次跑测累计到的 token 用量。
+func (c *intelligenceCheckUpstreamCapture) usageSnapshot() ProbeUsageTokens {
+	if c == nil {
+		return ProbeUsageTokens{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.usage
+}
+
 // intelligenceCheckUsageRequestID 生成记账行的 request_id。
 //
 // 必须唯一：usage_logs 在 (request_id, api_key_id) 上有唯一索引，同一轮跑测的多个
@@ -238,14 +262,18 @@ func (s *IntelligenceCheckService) recordRunUsage(
 	for index, rawRequestID := range requestIDs {
 		upstreamRequestID := strings.TrimSpace(rawRequestID)
 		usageLog := &UsageLog{
-			UserID:          userID,
-			APIKeyID:        apiKeyID,
-			AccountID:       run.AccountID,
-			RequestID:       intelligenceCheckUsageRequestID(run.ID, index),
-			Model:           model,
-			RequestedModel:  model,
-			InboundEndpoint: &inboundEndpoint,
-			FirstTokenMs:    probe.FirstTokenMs,
+			UserID:              userID,
+			APIKeyID:            apiKeyID,
+			AccountID:           run.AccountID,
+			RequestID:           intelligenceCheckUsageRequestID(run.ID, index),
+			Model:               model,
+			RequestedModel:      model,
+			InboundEndpoint:     &inboundEndpoint,
+			FirstTokenMs:        probe.FirstTokenMs,
+			InputTokens:         probe.Usage.Input,
+			OutputTokens:        probe.Usage.Output,
+			CacheCreationTokens: probe.Usage.CacheCreation,
+			CacheReadTokens:     probe.Usage.CacheRead,
 			// 费用与成本都留 0：没有向任何人收费，真实成本由 A6 反查回填到成本列。
 			TotalCost:      0,
 			ActualCost:     0,

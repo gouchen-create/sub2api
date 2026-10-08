@@ -177,6 +177,8 @@ type CheckResult struct {
 	// UpstreamRequestID 直连上游时从响应头读到的请求标识，供 A6 反查真实成本。
 	// 走本地网关的探针不填（那条账由网关自己记）。
 	UpstreamRequestID string
+	// Usage 从上游响应里解析出的 token 用量（输入/输出/缓存），供记账行填写。
+	Usage ProbeUsageTokens
 }
 
 // UserMonitorView 用户只读视图：监控概览（含主模型最近状态 + 7d 可用率 + 附加模型最近状态）。

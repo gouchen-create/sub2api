@@ -1040,6 +1040,7 @@ func (s *AccountTestService) processOpenAINonStream(c *gin.Context, body io.Read
 	if err := json.Unmarshal([]byte(trimmed), &data); err != nil {
 		return s.sendErrorAndEnd(c, "Invalid Responses API response: expected JSON data")
 	}
+	markIntelligenceCheckUsage(c, data)
 
 	// 顶层 error 优先：错误响应也可能带 200，不能只看状态码。
 	if errData, ok := data["error"].(map[string]any); ok {
@@ -2838,6 +2839,7 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 			continue
 		}
+		markIntelligenceCheckUsage(c, data)
 
 		// Support two Gemini response formats:
 		// - AI Studio: {"candidates": [...]}
@@ -2966,6 +2968,7 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 			continue
 		}
+		markIntelligenceCheckUsage(c, data)
 
 		eventType, _ := data["type"].(string)
 
@@ -3031,6 +3034,7 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 			return s.sendErrorAndEnd(c, "Invalid Chat Completions response from /v1/chat/completions: expected JSON data")
 		}
+		markIntelligenceCheckUsage(c, data)
 		seenJSON = true
 
 		if errData, ok := data["error"].(map[string]any); ok {
@@ -3103,6 +3107,7 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 			continue
 		}
+		markIntelligenceCheckUsage(c, data)
 
 		eventType, _ := data["type"].(string)
 

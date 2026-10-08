@@ -160,15 +160,19 @@ func (r *ChannelMonitorUsageRecorder) record(ctx context.Context, m *ChannelMoni
 			RequestedModel:  model,
 			InboundEndpoint: &inboundEndpoint,
 			// 纯成本口径：没有向任何人收费；真实成本由 A6 按上游请求 ID 反查回填。
-			TotalCost:      0,
-			ActualCost:     0,
-			RateMultiplier: 1,
-			BillingType:    BillingTypeBalance,
-			RequestType:    requestType,
-			Stream:         stream,
-			DurationMs:     durationMs,
-			FirstTokenMs:   res.FirstTokenMs,
-			CreatedAt:      createdAt,
+			TotalCost:           0,
+			ActualCost:          0,
+			RateMultiplier:      1,
+			BillingType:         BillingTypeBalance,
+			RequestType:         requestType,
+			Stream:              stream,
+			DurationMs:          durationMs,
+			FirstTokenMs:        res.FirstTokenMs,
+			InputTokens:         res.Usage.Input,
+			OutputTokens:        res.Usage.Output,
+			CacheCreationTokens: res.Usage.CacheCreation,
+			CacheReadTokens:     res.Usage.CacheRead,
+			CreatedAt:           createdAt,
 		}
 		if requestID := strings.TrimSpace(res.UpstreamRequestID); requestID != "" {
 			usageLog.UpstreamRequestID = &requestID

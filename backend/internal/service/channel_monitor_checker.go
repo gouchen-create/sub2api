@@ -163,6 +163,7 @@ func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model str
 	res.Stream = call.Stream
 	res.FirstTokenMs = call.FirstTokenMs
 	res.UpstreamRequestID = monitorUpstreamRequestID(opts, call.Headers)
+	res.Usage = call.Usage
 	respText := call.Text
 
 	if err != nil {
@@ -383,6 +384,8 @@ type monitorCallResult struct {
 	Stream bool
 	// FirstTokenMs 流式时的首个内容块到达耗时。
 	FirstTokenMs *int
+	// Usage 从上游响应里解析出的 token 用量（记账用）。
+	Usage ProbeUsageTokens
 }
 
 // callProvider 通过 providerAdapters 分发到具体实现。
@@ -421,6 +424,8 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 	} else {
 		result.Text = extractMonitorResponseText(adapter, respBytes)
 	}
+	// token 用量：非流式响应体的顶层 usage / usageMetadata。
+	captureProbeUsage(&result.Usage, parseProbeJSONObject(string(respBytes)))
 	return result, nil
 }
 
@@ -744,16 +749,17 @@ func postJSONStream(ctx context.Context, fullURL string, payload []byte, headers
 		return result, nil
 	}
 
-	text, firstTokenMs, raw := readMonitorSSE(resp.Body, kind, start)
+	text, firstTokenMs, raw, usage := readMonitorSSE(resp.Body, kind, start)
 	result.Text = text
 	result.FirstTokenMs = firstTokenMs
 	result.RawBody = raw
+	result.Usage = usage
 	return result, nil
 }
 
 // readMonitorSSE 逐行读取 SSE，拼出正文并记录首个内容块到达耗时。
 // 读取上限沿用 monitorResponseMaxBytes，避免上游异常流把内存撑爆。
-func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, firstTokenMs *int, raw string) {
+func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, firstTokenMs *int, raw string, usage ProbeUsageTokens) {
 	reader := bufio.NewReader(io.LimitReader(body, monitorResponseMaxBytes))
 	var textBuilder strings.Builder
 	var rawBuilder strings.Builder
@@ -767,6 +773,9 @@ func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, fir
 				if data == "[DONE]" {
 					break
 				}
+				// token 用量：Responses 的 response.completed、Anthropic 的 message_*、
+				// Chat 的 usage chunk 都会被同一个解析器接住。
+				captureProbeUsage(&usage, parseProbeJSONObject(data))
 				if content, done := monitorStreamContent(kind, data); content != "" || done {
 					if content != "" {
 						if firstTokenMs == nil {
@@ -785,7 +794,7 @@ func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, fir
 			break
 		}
 	}
-	return textBuilder.String(), firstTokenMs, rawBuilder.String()
+	return textBuilder.String(), firstTokenMs, rawBuilder.String(), usage
 }
 
 // monitorStreamContent 从一个 SSE data 载荷里取出增量正文，并报告流是否已结束。

@@ -94,6 +94,26 @@ func TestMarkIntelligenceCheckFirstContentNoopWithoutCapture(t *testing.T) {
 	require.NotPanics(t, func() { markIntelligenceCheckFirstContent(c) })
 }
 
+func TestIntelligenceCheckCaptureUsage(t *testing.T) {
+	c := intelligenceCheckTestGinContext(t)
+	capture := &intelligenceCheckUpstreamCapture{}
+	withIntelligenceCheckUpstreamCapture(c, capture)
+	require.True(t, capture.usageSnapshot().IsZero())
+
+	markIntelligenceCheckUsage(c, parseProbeJSONObject("{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":30}}}"))
+	usage := capture.usageSnapshot()
+	require.Equal(t, 70, usage.Input)
+	require.Equal(t, 20, usage.Output)
+	require.Equal(t, 30, usage.CacheRead)
+}
+
+func TestMarkIntelligenceCheckUsageNoopWithoutCapture(t *testing.T) {
+	c := intelligenceCheckTestGinContext(t)
+	require.NotPanics(t, func() {
+		markIntelligenceCheckUsage(c, map[string]any{"usage": map[string]any{"input_tokens": 1}})
+	})
+}
+
 // ==================== 记账 ====================
 
 type intelligenceCheckUsageLogRepoStub struct {
@@ -164,6 +184,7 @@ func TestRecordRunUsageWritesPureCostRowPerUpstreamRequest(t *testing.T) {
 		UpstreamResponded:  true,
 		UpstreamRequestIDs: []string{"req-a", "req-b"},
 		FirstTokenMs:       &firstToken,
+		Usage:              ProbeUsageTokens{Input: 11, Output: 22, CacheCreation: 3, CacheRead: 4},
 	}
 
 	svc.recordRunUsage(context.Background(), run, IntelligenceCheckRequest{AccountID: 7, DisableStream: true}, probe)
@@ -183,6 +204,10 @@ func TestRecordRunUsageWritesPureCostRowPerUpstreamRequest(t *testing.T) {
 		require.False(t, log.Stream)
 		require.Equal(t, 1234, *log.DurationMs)
 		require.Equal(t, 250, *log.FirstTokenMs)
+		require.Equal(t, 11, log.InputTokens)
+		require.Equal(t, 22, log.OutputTokens)
+		require.Equal(t, 3, log.CacheCreationTokens)
+		require.Equal(t, 4, log.CacheReadTokens)
 		require.Equal(t, startedAt, log.CreatedAt)
 		require.Equal(t, "claude-sonnet-4", *log.UpstreamModel)
 		require.Equal(t, "xhigh", *log.ReasoningEffort)

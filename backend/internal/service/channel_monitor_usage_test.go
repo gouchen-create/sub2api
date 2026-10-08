@@ -48,7 +48,7 @@ func TestReadMonitorSSEResponses(t *testing.T) {
 		"",
 	}, "\n")
 
-	text, firstTokenMs, raw := readMonitorSSE(strings.NewReader(body), monitorStreamResponses, time.Now())
+	text, firstTokenMs, raw, _ := readMonitorSSE(strings.NewReader(body), monitorStreamResponses, time.Now())
 	require.Equal(t, "ok", text)
 	require.NotNil(t, firstTokenMs, "首个内容块到达就该记下首字")
 	require.Contains(t, raw, "response.completed")
@@ -59,7 +59,7 @@ func TestReadMonitorSSEChat(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"content\":\"2\"}}]}\n\n" +
 		"data: [DONE]\n\n"
 
-	text, firstTokenMs, _ := readMonitorSSE(strings.NewReader(body), monitorStreamChat, time.Now())
+	text, firstTokenMs, _, _ := readMonitorSSE(strings.NewReader(body), monitorStreamChat, time.Now())
 	require.Equal(t, "12", text)
 	require.NotNil(t, firstTokenMs)
 }
@@ -114,6 +114,14 @@ func TestCallProviderStreamReadsFirstToken(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, call.Stream)
 	require.Nil(t, call.FirstTokenMs)
+}
+
+func TestReadMonitorSSEResponsesUsage(t *testing.T) {
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":30}}}}\n\n"
+	_, _, _, usage := readMonitorSSE(strings.NewReader(body), monitorStreamResponses, time.Now())
+	require.Equal(t, 70, usage.Input, "OpenAI 口径：input_tokens 含缓存，存储时拆出去")
+	require.Equal(t, 20, usage.Output)
+	require.Equal(t, 30, usage.CacheRead)
 }
 
 // ==================== 记账 ====================
@@ -226,6 +234,7 @@ func TestChannelMonitorUsageRecordWritesRow(t *testing.T) {
 		StatusCode:        200,
 		Stream:            true,
 		FirstTokenMs:      &firstToken,
+		Usage:             ProbeUsageTokens{Input: 70, Output: 20, CacheCreation: 5, CacheRead: 30},
 		LatencyMs:         &latency,
 		UpstreamRequestID: "req-1",
 		CheckedAt:         time.Now(),
@@ -246,6 +255,10 @@ func TestChannelMonitorUsageRecordWritesRow(t *testing.T) {
 	require.True(t, log.Stream)
 	require.Equal(t, 2500, *log.DurationMs)
 	require.Equal(t, 321, *log.FirstTokenMs)
+	require.Equal(t, 70, log.InputTokens)
+	require.Equal(t, 20, log.OutputTokens)
+	require.Equal(t, 5, log.CacheCreationTokens)
+	require.Equal(t, 30, log.CacheReadTokens)
 	require.Equal(t, "req-1", *log.UpstreamRequestID)
 	// 纯成本：没有向任何人收费，成本由 A6 反查回填。
 	require.Zero(t, log.TotalCost)

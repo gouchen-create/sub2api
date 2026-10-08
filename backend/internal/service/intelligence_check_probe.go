@@ -35,6 +35,8 @@ type IntelligenceCheckProbeResult struct {
 	UpstreamRequestIDs []string
 	// FirstTokenMs 是流式跑测的首个内容块到达耗时（首字）。非流式、或流里没内容时为 nil。
 	FirstTokenMs *int
+	// Usage 是从上游响应里解析出的 token 用量（输入/输出/缓存）。
+	Usage ProbeUsageTokens
 }
 
 // limitedResponseRecorder 是带字节上限的响应记录器。
@@ -131,6 +133,7 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 			firstTokenMs = &ms
 		}
 	}
+	usage := capture.usageSnapshot()
 
 	return &IntelligenceCheckProbeResult{
 		Status:             status,
@@ -144,6 +147,7 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 		UpstreamResponded:  upstreamResponded,
 		UpstreamRequestIDs: upstreamRequestIDs,
 		FirstTokenMs:       firstTokenMs,
+		Usage:              usage,
 	}, nil
 }
 
