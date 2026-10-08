@@ -1003,6 +1003,7 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelMonitorService,
 	ProvideChannelMonitorRunner,
 	NewChannelMonitorQuotaFetcher,
+	ProvideChannelMonitorUsageRecorder,
 	ProvideChannelMonitorV2Service,
 	ProvideChannelMonitorV1MatrixService,
 	// V1 矩阵只读视图既要读启用监控清单、又不该引入新的写路径，
@@ -1071,6 +1072,7 @@ func ProvideChannelMonitorRunner(
 	svc *ChannelMonitorService,
 	settingService *SettingService,
 	quotaFetcher *ChannelMonitorQuotaFetcher,
+	usageRecorder *ChannelMonitorUsageRecorder,
 ) *ChannelMonitorRunner {
 	r := NewChannelMonitorRunner(svc, settingService)
 	if svc != nil {
@@ -1079,9 +1081,21 @@ func ProvideChannelMonitorRunner(
 		svc.SetRuntimeReader(settingService)
 		svc.SetScheduler(r)
 		svc.SetQuotaFetcher(quotaFetcher)
+		svc.SetUsageRecorder(usageRecorder)
 	}
 	r.Start()
 	return r
+}
+
+// ProvideChannelMonitorUsageRecorder 创建「直连上游探针」的记账器。
+// 依赖四个既有仓储；其中 user/apiKey/account 用于解析记账归属与归属账号。
+func ProvideChannelMonitorUsageRecorder(
+	usageLogRepo UsageLogRepository,
+	userRepo UserRepository,
+	apiKeyRepo APIKeyRepository,
+	accountRepo AccountRepository,
+) *ChannelMonitorUsageRecorder {
+	return NewChannelMonitorUsageRecorder(usageLogRepo, userRepo, apiKeyRepo, accountRepo)
 }
 
 // ProvideChannelMonitorV2Service wires settings for user-facing privacy flags

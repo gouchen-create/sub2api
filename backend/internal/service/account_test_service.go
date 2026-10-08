@@ -3393,6 +3393,10 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 			}
 		}
 	}
+	// 智力检测跑测在首个内容事件上量「首字」；官方测试路径没装捕获器，恒为空操作。
+	if event.Type == "content" {
+		markIntelligenceCheckFirstContent(c)
+	}
 	eventJSON, _ := json.Marshal(event)
 	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", eventJSON); err != nil {
 		log.Printf("failed to write SSE event: %v", err)

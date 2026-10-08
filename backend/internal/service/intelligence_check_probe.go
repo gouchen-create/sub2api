@@ -33,6 +33,8 @@ type IntelligenceCheckProbeResult struct {
 	// UpstreamRequestIDs 是本次跑测所有上游响应头里读到的请求标识（去重、保序）。
 	// 后台 A6 取数任务拿它按 ID 反查真实扣费；账号没配 upstream_request_id_header 时为空。
 	UpstreamRequestIDs []string
+	// FirstTokenMs 是流式跑测的首个内容块到达耗时（首字）。非流式、或流里没内容时为 nil。
+	FirstTokenMs *int
 }
 
 // limitedResponseRecorder 是带字节上限的响应记录器。
@@ -120,6 +122,15 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 	}
 
 	upstreamResponded, upstreamRequestIDs := capture.snapshot()
+	// 首字只对流式跑测有意义：非流式下「第一个 content 事件」其实是响应结束时刻，
+	// 拿它当首字会把总耗时冒充成首字。
+	var firstTokenMs *int
+	if !disableStream {
+		if at := capture.firstContentTimestamp(); !at.IsZero() {
+			ms := int(at.Sub(startedAt) / time.Millisecond)
+			firstTokenMs = &ms
+		}
+	}
 
 	return &IntelligenceCheckProbeResult{
 		Status:             status,
@@ -132,6 +143,7 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 		Truncated:          recorder.truncated,
 		UpstreamResponded:  upstreamResponded,
 		UpstreamRequestIDs: upstreamRequestIDs,
+		FirstTokenMs:       firstTokenMs,
 	}, nil
 }
 

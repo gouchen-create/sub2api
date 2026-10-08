@@ -74,6 +74,26 @@ func TestCaptureIntelligenceCheckUpstreamRequestIDNoopWithoutCapture(t *testing.
 	})
 }
 
+func TestIntelligenceCheckCaptureKeepsFirstContentTimestamp(t *testing.T) {
+	c := intelligenceCheckTestGinContext(t)
+	capture := &intelligenceCheckUpstreamCapture{}
+	withIntelligenceCheckUpstreamCapture(c, capture)
+
+	require.True(t, capture.firstContentTimestamp().IsZero(), "没内容事件前不该有首字时刻")
+	markIntelligenceCheckFirstContent(c)
+	first := capture.firstContentTimestamp()
+	require.False(t, first.IsZero())
+
+	time.Sleep(2 * time.Millisecond)
+	markIntelligenceCheckFirstContent(c)
+	require.Equal(t, first, capture.firstContentTimestamp(), "首字只认第一次")
+}
+
+func TestMarkIntelligenceCheckFirstContentNoopWithoutCapture(t *testing.T) {
+	c := intelligenceCheckTestGinContext(t)
+	require.NotPanics(t, func() { markIntelligenceCheckFirstContent(c) })
+}
+
 // ==================== 记账 ====================
 
 type intelligenceCheckUsageLogRepoStub struct {
@@ -133,6 +153,7 @@ func TestRecordRunUsageWritesPureCostRowPerUpstreamRequest(t *testing.T) {
 	svc := newIntelligenceCheckUsageService(logs, users, keys)
 
 	startedAt := time.Now().Add(-time.Minute)
+	firstToken := 250
 	run := &IntelligenceCheckRun{ID: 9, AccountID: 7, ModelID: "claude-sonnet-4", ReasoningEffort: "xhigh"}
 	probe := &IntelligenceCheckProbeResult{
 		Status:             IntelligenceCheckStatusCompleted,
@@ -142,6 +163,7 @@ func TestRecordRunUsageWritesPureCostRowPerUpstreamRequest(t *testing.T) {
 		FinishedAt:         startedAt.Add(time.Second),
 		UpstreamResponded:  true,
 		UpstreamRequestIDs: []string{"req-a", "req-b"},
+		FirstTokenMs:       &firstToken,
 	}
 
 	svc.recordRunUsage(context.Background(), run, IntelligenceCheckRequest{AccountID: 7, DisableStream: true}, probe)
@@ -160,6 +182,7 @@ func TestRecordRunUsageWritesPureCostRowPerUpstreamRequest(t *testing.T) {
 		require.Equal(t, RequestTypeSync, log.RequestType)
 		require.False(t, log.Stream)
 		require.Equal(t, 1234, *log.DurationMs)
+		require.Equal(t, 250, *log.FirstTokenMs)
 		require.Equal(t, startedAt, log.CreatedAt)
 		require.Equal(t, "claude-sonnet-4", *log.UpstreamModel)
 		require.Equal(t, "xhigh", *log.ReasoningEffort)

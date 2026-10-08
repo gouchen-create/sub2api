@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -133,6 +134,9 @@ type CheckOptions struct {
 	// BodyOverride 在 merge 模式下做浅合并（key 命中黑名单时静默丢弃），
 	// 在 replace 模式下直接当作完整 body。
 	BodyOverride map[string]any
+	// UpstreamRequestIDHeader 是直连上游时要读取的响应头名（来自归属账号的
+	// extra.upstream_request_id_header）。为空表示这次不抓请求 ID。
+	UpstreamRequestIDHeader string
 }
 
 // runCheckForModel 对单个 (provider, model) 做一次完整检测。
@@ -150,22 +154,28 @@ func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model str
 	mode := bodyOverrideMode(opts)
 
 	start := time.Now()
-	respText, rawBody, statusCode, err := callProvider(ctx, provider, endpoint, apiKey, model, challenge.Prompt, opts)
+	call, err := callProvider(ctx, provider, endpoint, apiKey, model, challenge.Prompt, opts)
 	latency := time.Since(start)
 	latencyMs := int(latency / time.Millisecond)
 	res.LatencyMs = &latencyMs
+	// 记账所需的原始信息：仅直连上游的记账会读，不参与这里的状态判定。
+	res.StatusCode = call.Status
+	res.Stream = call.Stream
+	res.FirstTokenMs = call.FirstTokenMs
+	res.UpstreamRequestID = monitorUpstreamRequestID(opts, call.Headers)
+	respText := call.Text
 
 	if err != nil {
 		res.Status = MonitorStatusError
 		res.Message = truncateMessage(sanitizeErrorMessage(err.Error()))
 		return res
 	}
-	if statusCode < 200 || statusCode >= 300 {
+	if call.Status < 200 || call.Status >= 300 {
 		// 错误路径：用 rawBody 而非 respText（gjson textPath 抽取在错误响应里通常为空，
 		// 会丢掉真正的上游错误信息，例如 `{"error":{"message":"No available accounts ..."}}`）。
 		res.Status = MonitorStatusError
-		bodySnippet := truncateForErrorBody(rawBody)
-		res.Message = truncateMessage(sanitizeErrorMessage(fmt.Sprintf("upstream HTTP %d: %s", statusCode, bodySnippet)))
+		bodySnippet := truncateForErrorBody(call.RawBody)
+		res.Message = truncateMessage(sanitizeErrorMessage(fmt.Sprintf("upstream HTTP %d: %s", call.Status, bodySnippet)))
 		return res
 	}
 
@@ -358,37 +368,60 @@ func providerAdapterFor(provider, apiMode string) (providerAdapter, string, bool
 	return adapter, MonitorAPIModeChatCompletions, ok
 }
 
+// monitorCallResult 是一次上游调用的原始结果。
+// 相比旧的四个返回值多了响应头与首字时间——「直连上游探针记账」要用。
+type monitorCallResult struct {
+	// Text 按适配器抽取出的正文，仅在 2xx 时有意义。
+	Text string
+	// RawBody 完整响应体（已按 monitorResponseMaxBytes 截断），错误路径用来保留上游原话。
+	RawBody string
+	// Status HTTP 状态码；0 表示没拿到响应。
+	Status int
+	// Headers 上游响应头，用于抓上游请求 ID。
+	Headers http.Header
+	// Stream 本次是否以流式发起。
+	Stream bool
+	// FirstTokenMs 流式时的首个内容块到达耗时。
+	FirstTokenMs *int
+}
+
 // callProvider 通过 providerAdapters 分发到具体实现。
 // opts 承载用户的自定义 headers / body 覆盖（可为 nil）。
-//
-// 返回值：
-//   - extractedText: 按 textPath 抽出的成功文本，仅在 status 2xx 时有意义；非 2xx 时通常为空串
-//   - rawBody: 完整响应体的字符串形式（已被 monitorResponseMaxBytes 截断），用于错误路径保留上游真实回包
-//   - status: HTTP 状态码
-//   - err: 网络 / 序列化错误
-func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt string, opts *CheckOptions) (extractedText, rawBody string, status int, err error) {
+func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt string, opts *CheckOptions) (monitorCallResult, error) {
 	requestedAPIMode := checkAPIMode(opts)
 	if err := validateAPIMode(provider, requestedAPIMode); err != nil {
-		return "", "", 0, err
+		return monitorCallResult{}, err
 	}
 	adapter, apiMode, ok := providerAdapterFor(provider, requestedAPIMode)
 	if !ok {
-		return "", "", 0, fmt.Errorf("unsupported provider %q", provider)
+		return monitorCallResult{}, fmt.Errorf("unsupported provider %q", provider)
 	}
 	body, err := buildRequestBody(adapter, provider, apiMode, model, prompt, opts)
 	if err != nil {
-		return "", "", 0, err
+		return monitorCallResult{}, err
 	}
 	headers := mergeHeaders(adapter.buildHeaders(apiKey), opts)
 	full := joinURL(endpoint, adapter.buildPath(model))
-	respBytes, status, err := postRawJSON(ctx, full, body, headers)
+
+	// 只有请求体自己声明了 stream=true 才走流式。探针默认 body 恒为 stream=false，
+	// 因此除非管理员在「覆盖」模式的 Body 里显式打开，行为与改动前逐字一致。
+	if monitorRequestBodyStreams(body) {
+		if kind, ok := monitorStreamKind(provider, apiMode); ok {
+			return postJSONStream(ctx, full, body, headers, kind)
+		}
+	}
+
+	respBytes, status, respHeaders, err := postRawJSON(ctx, full, body, headers)
 	if err != nil {
-		return "", "", status, err
+		return monitorCallResult{Status: status, Headers: respHeaders}, err
 	}
+	result := monitorCallResult{Status: status, Headers: respHeaders, RawBody: string(respBytes)}
 	if provider == MonitorProviderOpenAI && apiMode == MonitorAPIModeResponses {
-		return extractOpenAIResponsesText(respBytes), string(respBytes), status, nil
+		result.Text = extractOpenAIResponsesText(respBytes)
+	} else {
+		result.Text = extractMonitorResponseText(adapter, respBytes)
 	}
-	return extractMonitorResponseText(adapter, respBytes), string(respBytes), status, nil
+	return result, nil
 }
 
 func extractMonitorResponseText(adapter providerAdapter, respBytes []byte) string {
@@ -613,12 +646,13 @@ func hasNonEmptyBodyValue(v any) bool {
 	}
 }
 
-// postRawJSON 发送 POST + 已序列化好的 JSON 字节，限制响应体大小，返回响应字节、HTTP status、错误。
+// postRawJSON 发送 POST + 已序列化好的 JSON 字节，限制响应体大小，
+// 返回响应字节、HTTP status、响应头、错误。
 // adapter 自行 marshal 是为了精确控制字段顺序与类型，所以这里直接收 []byte 而不是 any。
-func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers map[string]string) ([]byte, int, error) {
+func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers map[string]string) ([]byte, int, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, 0, fmt.Errorf("build request: %w", err)
+		return nil, 0, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -628,15 +662,170 @@ func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers ma
 
 	resp, err := monitorHTTPClient().Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("do request: %w", err)
+		return nil, 0, nil, fmt.Errorf("do request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, monitorResponseMaxBytes))
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read body: %w", err)
+		return nil, resp.StatusCode, resp.Header, fmt.Errorf("read body: %w", err)
 	}
-	return respBody, resp.StatusCode, nil
+	return respBody, resp.StatusCode, resp.Header, nil
+}
+
+// 流式探针支持的内容形态。
+const (
+	monitorStreamChat = iota + 1
+	monitorStreamResponses
+)
+
+// monitorRequestBodyStreams 报告最终请求体是否显式声明了 stream=true。
+// 只看请求体、不看协议默认值：探针默认 body 恒为 stream=false，
+// 因此「非流式行为与改动前逐字一致」这条不变式靠的就是这里。
+func monitorRequestBodyStreams(body []byte) bool {
+	var probe struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return probe.Stream
+}
+
+// monitorStreamKind 返回该 (provider, apiMode) 是否支持按 SSE 读取。
+// 只支持 OpenAI 系：其它 provider 的适配器没有对应的流式解析，维持整包读取。
+func monitorStreamKind(provider, apiMode string) (int, bool) {
+	if !isOpenAICompatibleChatProvider(provider) {
+		return 0, false
+	}
+	if provider == MonitorProviderOpenAI && defaultAPIMode(apiMode) == MonitorAPIModeResponses {
+		return monitorStreamResponses, true
+	}
+	return monitorStreamChat, true
+}
+
+// monitorUpstreamRequestID 从响应头里取出这次调用的上游请求 ID。
+// 头名来自归属账号的 extra.upstream_request_id_header；没配就返回空串。
+func monitorUpstreamRequestID(opts *CheckOptions, headers http.Header) string {
+	if opts == nil || len(headers) == 0 {
+		return ""
+	}
+	name := strings.TrimSpace(opts.UpstreamRequestIDHeader)
+	if name == "" {
+		return ""
+	}
+	return truncateUsageUpstreamRequestID(headers.Get(name))
+}
+
+// postJSONStream 以流式发起一次探针，边读边解析 SSE，量出首个内容块到达耗时。
+// 非 2xx 时仍整包读取响应体，交给上层做错误信息展示。
+func postJSONStream(ctx context.Context, fullURL string, payload []byte, headers map[string]string, kind int) (monitorCallResult, error) {
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
+	if err != nil {
+		return monitorCallResult{}, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := monitorHTTPClient().Do(req)
+	if err != nil {
+		return monitorCallResult{}, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	result := monitorCallResult{Status: resp.StatusCode, Headers: resp.Header, Stream: true}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, monitorResponseMaxBytes))
+		result.RawBody = string(raw)
+		return result, nil
+	}
+
+	text, firstTokenMs, raw := readMonitorSSE(resp.Body, kind, start)
+	result.Text = text
+	result.FirstTokenMs = firstTokenMs
+	result.RawBody = raw
+	return result, nil
+}
+
+// readMonitorSSE 逐行读取 SSE，拼出正文并记录首个内容块到达耗时。
+// 读取上限沿用 monitorResponseMaxBytes，避免上游异常流把内存撑爆。
+func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, firstTokenMs *int, raw string) {
+	reader := bufio.NewReader(io.LimitReader(body, monitorResponseMaxBytes))
+	var textBuilder strings.Builder
+	var rawBuilder strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if line != "" {
+			_, _ = rawBuilder.WriteString(line)
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "data:") {
+				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+				if data == "[DONE]" {
+					break
+				}
+				if content, done := monitorStreamContent(kind, data); content != "" || done {
+					if content != "" {
+						if firstTokenMs == nil {
+							ms := int(time.Since(start) / time.Millisecond)
+							firstTokenMs = &ms
+						}
+						_, _ = textBuilder.WriteString(content)
+					}
+					if done {
+						break
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return textBuilder.String(), firstTokenMs, rawBuilder.String()
+}
+
+// monitorStreamContent 从一个 SSE data 载荷里取出增量正文，并报告流是否已结束。
+func monitorStreamContent(kind int, data string) (string, bool) {
+	if data == "" {
+		return "", false
+	}
+	switch kind {
+	case monitorStreamResponses:
+		var event struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return "", false
+		}
+		switch event.Type {
+		case "response.output_text.delta":
+			return event.Delta, false
+		case "response.completed", "response.incomplete", "response.failed", "error":
+			return "", true
+		}
+		return "", false
+	case monitorStreamChat:
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return "", false
+		}
+		if len(chunk.Choices) == 0 {
+			return "", false
+		}
+		return chunk.Choices[0].Delta.Content, false
+	}
+	return "", false
 }
 
 // joinURL 保留 base 的上游路径前缀，并避免重复追加已有的 API 路径前缀。

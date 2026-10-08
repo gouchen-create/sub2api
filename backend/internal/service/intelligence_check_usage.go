@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -55,6 +53,9 @@ type intelligenceCheckUpstreamCapture struct {
 	mu         sync.Mutex
 	responded  bool
 	requestIDs []string
+	// firstContentAt 是首个 content 事件到达的时刻（只记第一次）。
+	// 智力检测是流式跑测，用它算「首字」；非流式跑测不采信（那只是响应结束时刻）。
+	firstContentAt time.Time
 }
 
 // withIntelligenceCheckUpstreamCapture 把捕获器挂到本次跑测的 gin.Context 上。
@@ -131,6 +132,31 @@ func (c *intelligenceCheckUpstreamCapture) snapshot() (bool, []string) {
 	return c.responded, append([]string(nil), c.requestIDs...)
 }
 
+// markIntelligenceCheckFirstContent 由 sendEvent 在发出第一个 content 事件时调用。
+// 只有智力检测跑测装了捕获器；官方连通性测试、定时巡检与用量采样都没装，
+// 所以这个钩子对它们恒为空操作。
+func markIntelligenceCheckFirstContent(c *gin.Context) {
+	capture := intelligenceCheckUpstreamCaptureFrom(c)
+	if capture == nil {
+		return
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.firstContentAt.IsZero() {
+		capture.firstContentAt = time.Now()
+	}
+}
+
+// firstContentTimestamp 返回首个 content 事件到达时刻；没等到内容时为零值。
+func (c *intelligenceCheckUpstreamCapture) firstContentTimestamp() time.Time {
+	if c == nil {
+		return time.Time{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.firstContentAt
+}
+
 // intelligenceCheckUsageRequestID 生成记账行的 request_id。
 //
 // 必须唯一：usage_logs 在 (request_id, api_key_id) 上有唯一索引，同一轮跑测的多个
@@ -139,70 +165,14 @@ func intelligenceCheckUsageRequestID(runID int64, index int) string {
 	return fmt.Sprintf("ic-%d-%d-%d", runID, time.Now().UnixMilli(), index)
 }
 
-// generateIntelligenceCheckUsageKeySecret 生成记账专用 Key 的密钥。
-// 与 APIKeyService.GenerateKey 同格式（sk- + 32 字节 hex），但长度压到列宽以内；
-// 该 Key 恒为 disabled，密钥本身不参与任何认证。
-func generateIntelligenceCheckUsageKeySecret() (string, error) {
-	raw := make([]byte, 24)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generate bookkeeping key secret: %w", err)
-	}
-	return "sk-" + hex.EncodeToString(raw), nil
-}
-
-// resolveUsageAttribution 解析记账归属：管理员用户 + 记账专用 Key。
-//
-// 专用 Key 按名字查找，找不到就建一个（disabled）。这样无需任何手工准备，
-// 也不会去借用管理员真正在用的某个 Key（那会让那个 Key 的用量统计凭空变脏）。
+// resolveUsageAttribution 解析记账归属：管理员用户 + 智力检测记账专用 Key。
+// 归属解析本身在 internal_usage_attribution.go，与渠道监控共用同一套。
 func (s *IntelligenceCheckService) resolveUsageAttribution(ctx context.Context) (int64, int64, error) {
-	if s == nil || s.userRepo == nil || s.apiKeyRepo == nil {
-		return 0, 0, fmt.Errorf("usage attribution repositories are not configured")
-	}
-	admin, err := s.userRepo.GetFirstAdmin(ctx)
-	if err != nil {
-		return 0, 0, fmt.Errorf("load first admin: %w", err)
-	}
-	if admin == nil || admin.ID <= 0 {
-		return 0, 0, fmt.Errorf("no active admin user to attribute intelligence check usage to")
-	}
-	if userID, keyID, ok := s.findUsageAttributionKey(ctx, admin.ID); ok {
-		return userID, keyID, nil
-	}
-
-	secret, err := generateIntelligenceCheckUsageKeySecret()
+	attr, err := resolveInternalUsageAttribution(ctx, s.userRepo, s.apiKeyRepo, intelligenceCheckUsageKeyName)
 	if err != nil {
 		return 0, 0, err
 	}
-	key := &APIKey{
-		UserID: admin.ID,
-		Key:    secret,
-		Name:   intelligenceCheckUsageKeyName,
-		Status: StatusDisabled,
-	}
-	if err := s.apiKeyRepo.Create(ctx, key); err != nil {
-		// 多实例并发时可能已被别的实例建好：再查一次，查到就直接用，不让这一轮白跑。
-		if userID, keyID, ok := s.findUsageAttributionKey(ctx, admin.ID); ok {
-			return userID, keyID, nil
-		}
-		return 0, 0, fmt.Errorf("create usage attribution key: %w", err)
-	}
-	if key.ID <= 0 {
-		return 0, 0, fmt.Errorf("created usage attribution key has no id")
-	}
-	return admin.ID, key.ID, nil
-}
-
-func (s *IntelligenceCheckService) findUsageAttributionKey(ctx context.Context, userID int64) (int64, int64, bool) {
-	keys, err := s.apiKeyRepo.SearchAPIKeys(ctx, userID, intelligenceCheckUsageKeyName, 20)
-	if err != nil {
-		return 0, 0, false
-	}
-	for i := range keys {
-		if keys[i].UserID == userID && keys[i].Name == intelligenceCheckUsageKeyName {
-			return userID, keys[i].ID, true
-		}
-	}
-	return 0, 0, false
+	return attr.UserID, attr.APIKeyID, nil
 }
 
 // recordRunUsage 为一次跑测写使用记录。
@@ -275,6 +245,7 @@ func (s *IntelligenceCheckService) recordRunUsage(
 			Model:           model,
 			RequestedModel:  model,
 			InboundEndpoint: &inboundEndpoint,
+			FirstTokenMs:    probe.FirstTokenMs,
 			// 费用与成本都留 0：没有向任何人收费，真实成本由 A6 反查回填到成本列。
 			TotalCost:      0,
 			ActualCost:     0,

@@ -86,6 +86,9 @@ type ChannelMonitorService struct {
 	// 之后构造，构造参数注入会破坏既有依赖顺序）。nil 时 fail-closed：
 	// 配额模式的检测产出「未配置」错误快照，Create/Update 关联账号直接报错。
 	quotaFetcher *ChannelMonitorQuotaFetcher
+	// usageRecorder 由 wire 通过 SetUsageRecorder 注入：给「直连上游」的探针补记
+	// 使用记录（见 channel_monitor_usage.go）。nil 时全部变成空操作，探针照常跑。
+	usageRecorder *ChannelMonitorUsageRecorder
 }
 
 const maxChannelMonitorNameRunes = 100
@@ -666,17 +669,23 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 		return nil, ErrChannelMonitorAPIKeyDecryptFailed
 	}
 
+	// 直连上游的探针要补记使用记录：先解析归属（本地探针会在这里被判掉，
+	// 免得网关刚记过又被记一遍），再把请求头名透给 checker 去抓上游请求 ID。
+	probeUsage := s.usageRecorder.prepareProbeUsage(ctx, m)
+
 	var results []*CheckResult
 	switch checkMode {
 	case MonitorCheckModeQuota:
 		results = s.runQuotaOnlyCheck(ctx, m)
 	case MonitorCheckModeQuotaProbe:
-		results = s.runChecksConcurrent(ctx, m)
+		results = s.runChecksConcurrent(ctx, m, probeUsage)
 		attachQuotaSnapshot(results, s.fetchQuotaSnapshot(ctx, m))
 	default:
-		results = s.runChecksConcurrent(ctx, m)
+		results = s.runChecksConcurrent(ctx, m, probeUsage)
 	}
 	s.persistCheckResults(ctx, m, results)
+	// 记账是 best-effort：写失败只记日志，绝不影响探针结果与历史。
+	s.usageRecorder.record(ctx, m, results, probeUsage)
 	return results, nil
 }
 
@@ -742,7 +751,7 @@ func (s *ChannelMonitorService) persistCheckResults(ctx context.Context, m *Chan
 
 // runChecksConcurrent 对 primary + extra 模型并发执行检测。
 // errgroup 仅用于等待，不传播错误（每个 model 失败都已打包进 CheckResult）。
-func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *ChannelMonitor) []*CheckResult {
+func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *ChannelMonitor, probeUsage *monitorProbeUsage) []*CheckResult {
 	models := append([]string{m.PrimaryModel}, m.ExtraModels...)
 	results := make([]*CheckResult, len(models))
 
@@ -755,6 +764,9 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 		ExtraHeaders:     m.ExtraHeaders,
 		BodyOverrideMode: m.BodyOverrideMode,
 		BodyOverride:     m.BodyOverride,
+	}
+	if probeUsage != nil {
+		opts.UpstreamRequestIDHeader = probeUsage.requestIDHeader
 	}
 
 	var eg errgroup.Group
@@ -788,6 +800,16 @@ func (s *ChannelMonitorService) SetQuotaFetcher(fetcher *ChannelMonitorQuotaFetc
 		return
 	}
 	s.quotaFetcher = fetcher
+}
+
+// SetUsageRecorder 由 wire 注入「直连上游探针」的记账器。
+// 走 setter 注入的理由与 quotaFetcher 相同：UsageLog/User/APIKey/Account 仓储
+// 都在本服务之后才进入 wire 图，构造参数注入会打乱既有依赖顺序。
+func (s *ChannelMonitorService) SetUsageRecorder(recorder *ChannelMonitorUsageRecorder) {
+	if s == nil {
+		return
+	}
+	s.usageRecorder = recorder
 }
 
 // ListEnabledMonitors 返回所有 enabled=true 的监控（解密后），供 runner 启动时建立任务表。

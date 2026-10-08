@@ -163,6 +163,20 @@ type CheckResult struct {
 	CheckedAt     time.Time
 	// Quota 配额模式附带快照（quota 模式唯一数据；quota_probe 挂在主模型行）。
 	Quota *domain.MonitorQuotaSnapshot
+
+	// 以下字段只服务于「直连上游探针记账」（见 channel_monitor_usage.go），
+	// 不写入历史表、也不改变探针自身的判定。
+
+	// StatusCode 上游 HTTP 状态码；0 表示连响应都没拿到（网络/构造错误）。
+	// 记账只认 2xx：非 2xx 与网络失败基本没有产生消费。
+	StatusCode int
+	// Stream 表示这次探针是否以流式发起（决定记账行的 request_type / stream 口径）。
+	Stream bool
+	// FirstTokenMs 流式探针首个内容块到达耗时；非流式或流里没内容时为 nil。
+	FirstTokenMs *int
+	// UpstreamRequestID 直连上游时从响应头读到的请求标识，供 A6 反查真实成本。
+	// 走本地网关的探针不填（那条账由网关自己记）。
+	UpstreamRequestID string
 }
 
 // UserMonitorView 用户只读视图：监控概览（含主模型最近状态 + 7d 可用率 + 附加模型最近状态）。
