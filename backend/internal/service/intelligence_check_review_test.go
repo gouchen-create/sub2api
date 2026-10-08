@@ -38,7 +38,7 @@ func (r *reviewRunRepoStub) UpdateReview(_ context.Context, run *IntelligenceChe
 // settingSvc 传 nil 表示联动开关不可用 —— syncAccountStatus 会直接短路，
 // 因此这些用例覆盖的是「评审本身」，不掺入账号状态联动。
 func newReviewService(repo *reviewRunRepoStub) *IntelligenceCheckService {
-	return NewIntelligenceCheckService(nil, repo, nil, nil)
+	return NewIntelligenceCheckService(nil, repo, nil, nil, nil, nil, nil)
 }
 
 func reviewableRun() *IntelligenceCheckRun {

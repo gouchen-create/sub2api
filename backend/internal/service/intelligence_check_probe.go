@@ -27,6 +27,12 @@ type IntelligenceCheckProbeResult struct {
 	FinishedAt    time.Time
 	// Truncated 表示捕获内容触及上限被截断，此时作品不应判定为通过。
 	Truncated bool
+	// UpstreamResponded 表示本次跑测至少收到过一次上游 HTTP 响应。
+	// 它是「这次跑测是否真的在别人家花了钱」的判据：没收到响应就不写使用记录。
+	UpstreamResponded bool
+	// UpstreamRequestIDs 是本次跑测所有上游响应头里读到的请求标识（去重、保序）。
+	// 后台 A6 取数任务拿它按 ID 反查真实扣费；账号没配 upstream_request_id_header 时为空。
+	UpstreamRequestIDs []string
 }
 
 // limitedResponseRecorder 是带字节上限的响应记录器。
@@ -95,6 +101,11 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 		DisableStream: disableStream,
 	})
 
+	// 装上上游响应捕获器：平台测试拿到响应时会记下上游请求 ID（供 A6 反查成本）。
+	// 官方连通性测试没有这个捕获器，相关钩子全部退化为空操作。
+	capture := &intelligenceCheckUpstreamCapture{}
+	withIntelligenceCheckUpstreamCapture(ginCtx, capture)
+
 	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, prompt, AccountTestModeDefault)
 
 	finishedAt := time.Now()
@@ -108,15 +119,19 @@ func (s *AccountTestService) RunIntelligenceCheckProbe(
 		}
 	}
 
+	upstreamResponded, upstreamRequestIDs := capture.snapshot()
+
 	return &IntelligenceCheckProbeResult{
-		Status:        status,
-		ResponseText:  responseText,
-		UpstreamModel: upstreamModel,
-		ErrorMessage:  errMsg,
-		LatencyMs:     finishedAt.Sub(startedAt).Milliseconds(),
-		StartedAt:     startedAt,
-		FinishedAt:    finishedAt,
-		Truncated:     recorder.truncated,
+		Status:             status,
+		ResponseText:       responseText,
+		UpstreamModel:      upstreamModel,
+		ErrorMessage:       errMsg,
+		LatencyMs:          finishedAt.Sub(startedAt).Milliseconds(),
+		StartedAt:          startedAt,
+		FinishedAt:         finishedAt,
+		Truncated:          recorder.truncated,
+		UpstreamResponded:  upstreamResponded,
+		UpstreamRequestIDs: upstreamRequestIDs,
 	}, nil
 }
 

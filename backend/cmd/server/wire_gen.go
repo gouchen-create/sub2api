@@ -193,7 +193,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	pluginManager := service.ProvidePluginManager(pluginRepository, secretEncryptor, configConfig, pluginHostInfo, pluginKVStore, openAIGatewayService)
 	accountTestService := service.ProvideAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, grokTokenProvider, antigravityGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService, openAIGatewayService, settingService, pluginManager)
 	intelligenceCheckRunRepository := repository.NewIntelligenceCheckRunRepository(db)
-	intelligenceCheckService := service.ProvideIntelligenceCheckService(accountTestService, intelligenceCheckRunRepository, accountRepository, settingService)
+	intelligenceCheckService := service.ProvideIntelligenceCheckService(accountTestService, intelligenceCheckRunRepository, accountRepository, settingService, usageLogRepository, userRepository, apiKeyRepository)
 	intelligenceCheckPublicHandler := handler.NewIntelligenceCheckPublicHandler(intelligenceCheckService)
 	dashboardAggregationRepository := repository.NewDashboardAggregationRepository(db)
 	dashboardStatsCache := repository.NewDashboardCache(redisClient, configConfig)

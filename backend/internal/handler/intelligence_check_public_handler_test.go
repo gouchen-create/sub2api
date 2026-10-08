@@ -40,7 +40,7 @@ func renderPublicWall(t *testing.T, runs []*service.IntelligenceCheckRun) public
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
-	svc := service.NewIntelligenceCheckService(nil, &publicWallRepoStub{runs: runs}, nil, nil)
+	svc := service.NewIntelligenceCheckService(nil, &publicWallRepoStub{runs: runs}, nil, nil, nil, nil, nil)
 	h := NewIntelligenceCheckPublicHandler(svc)
 
 	engine := gin.New()

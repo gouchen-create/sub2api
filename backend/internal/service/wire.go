@@ -668,8 +668,11 @@ func ProvideIntelligenceCheckService(
 	runRepo IntelligenceCheckRunRepository,
 	accountRepo AccountRepository,
 	settingSvc *SettingService,
+	usageLogRepo UsageLogRepository,
+	userRepo UserRepository,
+	apiKeyRepo APIKeyRepository,
 ) *IntelligenceCheckService {
-	return NewIntelligenceCheckService(accountTestSvc, runRepo, accountRepo, settingSvc)
+	return NewIntelligenceCheckService(accountTestSvc, runRepo, accountRepo, settingSvc, usageLogRepo, userRepo, apiKeyRepo)
 }
 
 // ProvideOpsScheduledReportService creates and starts OpsScheduledReportService.

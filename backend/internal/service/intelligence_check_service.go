@@ -80,6 +80,12 @@ type IntelligenceCheckService struct {
 	// 评审判定本身不依赖它们，所以联动关闭时评审依旧完全可用。
 	accountRepo AccountRepository
 	settingSvc  *SettingService
+	// 下面三个仓储只服务于「跑测消费是否进使用记录」：
+	// usageLogRepo 写记账行，userRepo/apiKeyRepo 解析记账归属（见 intelligence_check_usage.go）。
+	// 三者缺席时跑测照常执行，只是不写使用记录。
+	usageLogRepo UsageLogRepository
+	userRepo     UserRepository
+	apiKeyRepo   APIKeyRepository
 }
 
 // NewIntelligenceCheckService 构造智力检测服务。
@@ -88,12 +94,18 @@ func NewIntelligenceCheckService(
 	runRepo IntelligenceCheckRunRepository,
 	accountRepo AccountRepository,
 	settingSvc *SettingService,
+	usageLogRepo UsageLogRepository,
+	userRepo UserRepository,
+	apiKeyRepo APIKeyRepository,
 ) *IntelligenceCheckService {
 	return &IntelligenceCheckService{
-		accountTest: accountTest,
-		runRepo:     runRepo,
-		accountRepo: accountRepo,
-		settingSvc:  settingSvc,
+		accountTest:  accountTest,
+		runRepo:      runRepo,
+		accountRepo:  accountRepo,
+		settingSvc:   settingSvc,
+		usageLogRepo: usageLogRepo,
+		userRepo:     userRepo,
+		apiKeyRepo:   apiKeyRepo,
 	}
 }
 
@@ -314,6 +326,10 @@ func (s *IntelligenceCheckService) ExecuteRun(ctx context.Context, runID int64, 
 	if err := s.runRepo.UpdateResult(ctx, run); err != nil {
 		return fmt.Errorf("persist intelligence check run %d: %w", runID, err)
 	}
+
+	// 跑测记录落定之后再补记消费：这笔钱是在上游真实花掉的，不能只留在跑测记录里。
+	// 记账本身是 best-effort——写使用记录失败绝不能反过来把一次成功的跑测判成失败。
+	s.recordRunUsage(ctx, run, req, probe)
 	return nil
 }
 
