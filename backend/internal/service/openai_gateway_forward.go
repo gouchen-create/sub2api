@@ -195,7 +195,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		originalModel = reqModel
 	}
 
-	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
+	// 直通模式：上游同时提供 /v1/responses 与 /v1/chat/completions，responses 入站
+	// 直接打上游原生 /v1/responses，不做 responses→CC 回退转换。
+	// （该转换是 O(请求体体积) 的：解析 + 工具解析 + reasoning 回写 + 转换 + 序列化
+	// 都在首字计时窗口内，大请求实测占首字 1s 以上。）
+	//
+	// 注意：覆盖点必须放在这里，不能放进 shouldForwardOpenAIResponsesViaRawChatCompletions
+	// 本身——该 helper 在 chat 入站（openai_gateway_chat_completions.go:189）里
+	// 含义相同（true = 走原生 CC），在 helper 里返回 false 会把 chat 入站反向推进
+	// CC→Responses 转换分支。
+	if !openai_compat.ResponsesPassthroughMode(account.Extra) &&
+		shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
@@ -1364,15 +1374,9 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 			return false
 		}
 	}
-	// 直通模式：上游同时提供 /v1/responses 与 /v1/chat/completions，responses 入站
-	// 直接打上游原生 /v1/responses，不做 responses→CC 回退转换。
-	// （该转换是 O(请求体体积) 的：解析 + 工具解析 + reasoning 回写 + 转换 + 序列化
-	// 都在首字计时窗口内，大请求实测占首字 1s 以上。）
-	// 注意：CN 供应商的显式协议配置（credentials.api_protocol）优先级更高，
-	// 因此本判定只作用于非 CN 分支。
-	if openai_compat.ResponsesPassthroughMode(account.Extra) {
-		return false
-	}
+	// 直通模式（passthrough）不在本 helper 内覆盖：该 helper 被两种入站共用，
+	// true 一律表示"走原生 CC"。直通模式下 responses 入站的覆盖点在调用方
+	// （见 forwardAsResponses 内的 !ResponsesPassthroughMode 判定）。
 	return !openai_compat.ShouldUseResponsesAPI(account.Extra)
 }
 
