@@ -1771,7 +1771,8 @@ const openAIResponsesModeOptions = computed(() => [
   {
     value: 'force_chat_completions',
     label: t('admin.accounts.openai.responsesModeForceChatCompletions')
-  }
+  },
+  { value: 'passthrough', label: t('admin.accounts.openai.responsesModePassthrough') }
 ])
 const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -1779,6 +1780,9 @@ const openAITextEndpointCapabilityLabel = computed(() => {
   }
   if (openAIResponsesMode.value === 'force_chat_completions') {
     return t('admin.accounts.openai.capabilityChatCompletions')
+  }
+  if (openAIResponsesMode.value === 'passthrough') {
+    return t('admin.accounts.openai.capabilityTextPassthrough')
   }
   return t('admin.accounts.openai.capabilityTextAuto')
 })

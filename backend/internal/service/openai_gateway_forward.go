@@ -1364,6 +1364,15 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 			return false
 		}
 	}
+	// 直通模式：上游同时提供 /v1/responses 与 /v1/chat/completions，responses 入站
+	// 直接打上游原生 /v1/responses，不做 responses→CC 回退转换。
+	// （该转换是 O(请求体体积) 的：解析 + 工具解析 + reasoning 回写 + 转换 + 序列化
+	// 都在首字计时窗口内，大请求实测占首字 1s 以上。）
+	// 注意：CN 供应商的显式协议配置（credentials.api_protocol）优先级更高，
+	// 因此本判定只作用于非 CN 分支。
+	if openai_compat.ResponsesPassthroughMode(account.Extra) {
+		return false
+	}
 	return !openai_compat.ShouldUseResponsesAPI(account.Extra)
 }
 
