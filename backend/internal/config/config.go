@@ -1030,6 +1030,11 @@ type GatewayConfig struct {
 	OpenAIProxyStreamCircuit GatewayOpenAIProxyStreamCircuitConfig `mapstructure:"openai_proxy_stream_circuit"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
+	// UpstreamRequestCompression: 出站请求体 gzip 压缩（默认关闭）。
+	// 用于级联中转场景：上游（如聚合站）接收请求体的吞吐往往远低于带宽，
+	// 体型大的上下文（十几万 token 的 tools + 历史）会在"把请求体送进上游"这一段
+	// 稳定吃掉数秒。压缩后字节数通常降到 1/8~1/10，可成比例削减这段耗时。
+	UpstreamRequestCompression GatewayUpstreamRequestCompressionConfig `mapstructure:"upstream_request_compression"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -1160,6 +1165,27 @@ type GatewayCNProvidersConfig struct {
 type GatewayLiveConfig struct {
 	// MaxSessionDurationSeconds 是 Live 会话的硬上限。
 	MaxSessionDurationSeconds int `mapstructure:"max_session_duration_seconds"`
+}
+
+// GatewayUpstreamRequestCompressionConfig 出站请求体 gzip 压缩配置。
+//
+// 背景：在中转站作为上游的链路里，上游"读入请求体"的吞吐常常只有几百 KB/s，
+// 而一次 Agent 请求的上下文可达十几万 token（数百 KB ~ 1MB）。此时
+// "把请求体传进上游"会稳定占用数秒，且与首字延迟几乎等长。
+// 该配置让网关在出站前把请求体 gzip 压缩，并在上游以 400/415 拒绝时
+// 自动回退为未压缩请求重试一次，因此默认关闭也绝对安全。
+//
+// 建议只对"已确认接受 gzip 请求体"的中转账号开启（用 AccountIDs 精确限定），
+// 不要对官方 OpenAI / Anthropic 等端点开启。
+type GatewayUpstreamRequestCompressionConfig struct {
+	// Enabled: 是否启用出站请求体压缩（默认 false）
+	Enabled bool `mapstructure:"enabled"`
+	// MinBytes: 小于该字节数的请求体不压缩（默认 65536）。
+	// 压缩本身有 CPU 与头部开销，小请求压了反而亏。
+	MinBytes int64 `mapstructure:"min_bytes"`
+	// AccountIDs: 生效的账号 ID 白名单。留空表示对所有账号生效；
+	// 只要非空，就只有列表内的账号会被压缩——推荐用它精确限定中转账号。
+	AccountIDs []int64 `mapstructure:"account_ids"`
 }
 
 // GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
@@ -2527,6 +2553,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_http2.fallback_error_threshold", 2)
 	viper.SetDefault("gateway.openai_http2.fallback_window_seconds", 60)
 	viper.SetDefault("gateway.openai_http2.fallback_ttl_seconds", 600)
+	// 出站请求体压缩：默认关闭；阈值 64KB（小请求压缩不划算）
+	viper.SetDefault("gateway.upstream_request_compression.enabled", false)
+	viper.SetDefault("gateway.upstream_request_compression.min_bytes", int64(64*1024))
+	viper.SetDefault("gateway.upstream_request_compression.account_ids", []int64{})
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.disabled", false)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.failure_threshold", 2)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.window_seconds", 60)
