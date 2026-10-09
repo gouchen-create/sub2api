@@ -2,15 +2,28 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/alitto/pond/v2"
+	"github.com/google/uuid"
 )
+
+// channelMonitorProbeLockKeyPrefix 是多实例选主键前缀：同一条监控同一时刻
+// 只允许一个实例真正发探针。探针会真花钱、真写使用记录，重复执行就是重复消费
+// （2026-10-09 演练容器残留事故：两个实例各探一遍，记录翻倍）。
+const channelMonitorProbeLockKeyPrefix = "channel:monitor:probe:"
+
+// channelMonitorProbeLockTTL 是选主锁的崩溃兜底 TTL：必须大于单次探针最坏耗时
+// （runOne 的 ctx 超时 = monitorRequestTimeout + monitorPingTimeout + buffer），
+// 正常路径探针一结束就释放，不靠 TTL 续期。
+const channelMonitorProbeLockTTL = 3 * time.Minute
 
 // MonitorScheduler 调度器接口，供 ChannelMonitorService 在 CRUD 时回调，
 // 用 setter 注入避免 service ↔ runner 的 wire 依赖环。
@@ -68,6 +81,12 @@ type ChannelMonitorRunner struct {
 	// activeWorkers 当前在跑的探测数。pool 容量固定为允许的最大并发，
 	// 真正的并发上限由 activeWorkers 与运行时配置共同把关，使后台改并发可即时生效。
 	activeWorkers atomic.Int64
+
+	// 多实例选主（由 wire 通过 SetLeaderLock 注入）。三者缺席时
+	// tryAcquireSingletonLeaderLock 会退化为「不设闸门」，单实例/单测照常跑。
+	lockCache  LeaderLockCache
+	lockDB     *sql.DB
+	instanceID string
 }
 
 // scheduledMonitor 单个监控的运行时上下文。
@@ -114,7 +133,18 @@ func newChannelMonitorRunner(svc monitorRunnerSvc, settingService *SettingServic
 		parentCancel:   cancel,
 		tasks:          make(map[int64]*scheduledMonitor),
 		inFlight:       make(map[int64]struct{}),
+		instanceID:     uuid.NewString(),
 	}
+}
+
+// SetLeaderLock 注入多实例选主依赖（与智力检测、上游成本采集同一套机制）。
+// 走 setter 注入的理由与其它服务一致：lockCache/db 在 wire 图中较晚就绪。
+func (r *ChannelMonitorRunner) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
+	if r == nil {
+		return
+	}
+	r.lockCache = lockCache
+	r.lockDB = db
 }
 
 // Start 加载所有 enabled monitor 并为每个建立独立定时任务。
@@ -364,6 +394,17 @@ func (r *ChannelMonitorRunner) runOne(id int64, name string) {
 				"monitor_id", id, "name", name, "panic", rec)
 		}
 	}()
+
+	// 多实例选主：同一条监控同一时刻只允许一个实例真正发探针。
+	// 探针会真花钱、真写使用记录，两个实例各探一遍就是重复消费。
+	release, acquired := tryAcquireSingletonLeaderLock(ctx, r.lockCache, r.lockDB,
+		channelMonitorProbeLockKeyPrefix+strconv.FormatInt(id, 10), r.instanceID, channelMonitorProbeLockTTL)
+	if !acquired {
+		slog.Debug("channel_monitor: probe lock held by another instance, skip",
+			"monitor_id", id, "name", name)
+		return
+	}
+	defer release()
 
 	if _, err := r.svc.RunCheck(ctx, id); err != nil {
 		if errors.Is(err, ErrChannelMonitorAPIKeyDecryptFailed) {

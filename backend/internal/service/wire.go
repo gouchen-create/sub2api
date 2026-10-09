@@ -1073,6 +1073,8 @@ func ProvideChannelMonitorRunner(
 	settingService *SettingService,
 	quotaFetcher *ChannelMonitorQuotaFetcher,
 	usageRecorder *ChannelMonitorUsageRecorder,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *ChannelMonitorRunner {
 	r := NewChannelMonitorRunner(svc, settingService)
 	if svc != nil {
@@ -1083,6 +1085,8 @@ func ProvideChannelMonitorRunner(
 		svc.SetQuotaFetcher(quotaFetcher)
 		svc.SetUsageRecorder(usageRecorder)
 	}
+	// 多实例选主：探针会真花钱、真写使用记录，必须保证同一时刻只有一个实例在探。
+	r.SetLeaderLock(lockCache, db)
 	r.Start()
 	return r
 }
