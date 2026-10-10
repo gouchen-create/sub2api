@@ -21,12 +21,19 @@ type internalUsageAttribution struct {
 }
 
 // resolveInternalUsageAttribution 解析（或创建）一份内部记账归属。
-// keyName 是专用 Key 的名字，各功能用自己的名字以便在 Key 列表里一眼分辨。
+//
+// keyName 是专用 Key 的**当前**名字，各功能用自己的名字以便在 Key 列表里一眼分辨；
+// legacyNames 是它历史用过的名字，仅用于「改名后仍能找回既有 Key」。
+//
+// 为什么必须传旧名：本函数是按**精确名字**查找+复用的（见 findInternalUsageKey），
+// 改名后若只按新名查，既有 Key 会被判定为「不存在」，于是系统再建一个新的，
+// 列表里就出现两个含义相同的 Key，而旧的那个还挂着全部历史记账行、删不得。
 func resolveInternalUsageAttribution(
 	ctx context.Context,
 	userRepo UserRepository,
 	apiKeyRepo APIKeyRepository,
 	keyName string,
+	legacyNames ...string,
 ) (internalUsageAttribution, error) {
 	if userRepo == nil || apiKeyRepo == nil {
 		return internalUsageAttribution{}, fmt.Errorf("usage attribution repositories are not configured")
@@ -38,7 +45,7 @@ func resolveInternalUsageAttribution(
 	if admin == nil || admin.ID <= 0 {
 		return internalUsageAttribution{}, fmt.Errorf("no active admin user to attribute internal usage to")
 	}
-	if attr, ok := findInternalUsageKey(ctx, apiKeyRepo, admin.ID, keyName); ok {
+	if attr, ok := findInternalUsageKey(ctx, apiKeyRepo, admin.ID, keyName, legacyNames...); ok {
 		return attr, nil
 	}
 
@@ -54,7 +61,7 @@ func resolveInternalUsageAttribution(
 	}
 	if err := apiKeyRepo.Create(ctx, key); err != nil {
 		// 多实例并发时可能已被别的实例建好：再查一次，查到就直接用。
-		if attr, ok := findInternalUsageKey(ctx, apiKeyRepo, admin.ID, keyName); ok {
+		if attr, ok := findInternalUsageKey(ctx, apiKeyRepo, admin.ID, keyName, legacyNames...); ok {
 			return attr, nil
 		}
 		return internalUsageAttribution{}, fmt.Errorf("create internal usage key %q: %w", keyName, err)
@@ -65,19 +72,33 @@ func resolveInternalUsageAttribution(
 	return internalUsageAttribution{UserID: admin.ID, APIKeyID: key.ID}, nil
 }
 
+// findInternalUsageKey 依次按「当前名 → 各历史名」查找既有专用 Key，任一命中即复用。
+//
+// 新建时一律用当前名（见调用方），所以这一路的唯一职责就是「别把改名误判成丢失」。
 func findInternalUsageKey(
 	ctx context.Context,
 	apiKeyRepo APIKeyRepository,
 	userID int64,
 	keyName string,
+	legacyNames ...string,
 ) (internalUsageAttribution, bool) {
-	keys, err := apiKeyRepo.SearchAPIKeys(ctx, userID, keyName, 20)
-	if err != nil {
-		return internalUsageAttribution{}, false
-	}
-	for i := range keys {
-		if keys[i].UserID == userID && keys[i].Name == keyName {
-			return internalUsageAttribution{UserID: userID, APIKeyID: keys[i].ID}, true
+	candidates := make([]string, 0, len(legacyNames)+1)
+	candidates = append(candidates, keyName)
+	candidates = append(candidates, legacyNames...)
+
+	for _, name := range candidates {
+		if name == "" {
+			continue
+		}
+		keys, err := apiKeyRepo.SearchAPIKeys(ctx, userID, name, 20)
+		if err != nil {
+			// 单个候选查失败不该让整轮落空：继续试下一个名字。
+			continue
+		}
+		for i := range keys {
+			if keys[i].UserID == userID && keys[i].Name == name {
+				return internalUsageAttribution{UserID: userID, APIKeyID: keys[i].ID}, true
+			}
 		}
 	}
 	return internalUsageAttribution{}, false

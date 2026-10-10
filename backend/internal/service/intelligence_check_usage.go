@@ -32,8 +32,16 @@ const (
 	intelligenceCheckUsageInboundEndpoint = "internal://intelligence-check"
 
 	// intelligenceCheckUsageKeyName 是自动创建的记账专用 API Key 名。
-	// 名字起得显眼，避免管理员在 Key 列表里误删（删了会级联带走这些使用记录）。
-	intelligenceCheckUsageKeyName = "智力检测记账专用Key（系统自动创建，请勿删除）"
+	//
+	// 短名是为了在 Key 列表里不挤占列宽；但**名字被运行时精确匹配**，
+	// 改名必须同时登记旧名（见 resolveInternalUsageAttribution），
+	// 否则系统会把它当成新 Key 再建一个。删它会级联带走这些使用记录，
+	// 所以维护时仍需谨慎。
+	intelligenceCheckUsageKeyName = "智力检测·系统"
+
+	// intelligenceCheckUsageKeyLegacyName 是本 Key 历史上的长名，仅供查找兜底：
+	// 库里既有的那条 Key 仍叫这个名字，且它挂着全部历史记账行。
+	intelligenceCheckUsageKeyLegacyName = "智力检测记账专用Key（系统自动创建，请勿删除）"
 
 	intelligenceCheckUsageLogComponent = "service.intelligence_check_usage"
 
@@ -192,7 +200,8 @@ func intelligenceCheckUsageRequestID(runID int64, index int) string {
 // resolveUsageAttribution 解析记账归属：管理员用户 + 智力检测记账专用 Key。
 // 归属解析本身在 internal_usage_attribution.go，与渠道监控共用同一套。
 func (s *IntelligenceCheckService) resolveUsageAttribution(ctx context.Context) (int64, int64, error) {
-	attr, err := resolveInternalUsageAttribution(ctx, s.userRepo, s.apiKeyRepo, intelligenceCheckUsageKeyName)
+	attr, err := resolveInternalUsageAttribution(ctx, s.userRepo, s.apiKeyRepo,
+		intelligenceCheckUsageKeyName, intelligenceCheckUsageKeyLegacyName)
 	if err != nil {
 		return 0, 0, err
 	}

@@ -27,7 +27,18 @@ const (
 	ChannelMonitorUsageInboundEndpoint = "internal://channel-monitor"
 
 	// channelMonitorUsageKeyName 是渠道监控记账专用 API Key 名。
-	channelMonitorUsageKeyName = "渠道监控记账专用Key（系统自动创建，请勿删除）"
+	//
+	// 起得短是因为它只在「API 密钥」列表里露脸，长了会挤占列宽；但**名字是被
+	// 运行时精确匹配的**（见 resolveInternalUsageAttribution），所以改名必须
+	// 同时在下面登记旧名，否则升级那一刻会被判定为「不存在」而重复建一个。
+	channelMonitorUsageKeyName = "渠道监控·系统"
+
+	// channelMonitorUsageKeyLegacyName 是本 Key 历史上的长名。
+	//
+	// 仅供查找兜底：库里既有的那条 Key 仍叫这个名字，且它挂着全部历史记账行
+	// （usage_logs.api_key_id 指向它），不能弃用重来。运维改名后本常量可保留，
+	// 留着对「尚未完成改名的实例」也是安全的。
+	channelMonitorUsageKeyLegacyName = "渠道监控记账专用Key（系统自动创建，请勿删除）"
 
 	channelMonitorUsageLogComponent = "service.channel_monitor_usage"
 )
@@ -117,7 +128,8 @@ func (r *ChannelMonitorUsageRecorder) record(ctx context.Context, m *ChannelMoni
 	usageCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
 
-	attr, err := resolveInternalUsageAttribution(usageCtx, r.userRepo, r.apiKeyRepo, channelMonitorUsageKeyName)
+	attr, err := resolveInternalUsageAttribution(usageCtx, r.userRepo, r.apiKeyRepo,
+		channelMonitorUsageKeyName, channelMonitorUsageKeyLegacyName)
 	if err != nil {
 		logger.LegacyPrintf(channelMonitorUsageLogComponent,
 			"channel_monitor_usage_attribution_unavailable: monitor_id=%d err=%v", m.ID, err)
