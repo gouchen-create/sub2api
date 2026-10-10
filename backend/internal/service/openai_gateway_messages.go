@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -64,12 +65,17 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		default:
 			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 		}
-	} else if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
+	} else if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() ||
+		openai_compat.ResponsesPassthroughMode(account.Extra) {
 		// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点时，
 		// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留
 		// thinking / tool_use / cache 语义，适配 Claude Code 等原生客户端。
 		// 必须先于 ShouldUseResponsesAPI 分流：Anthropic 协议账号经 probe 落标
 		// openai_responses_supported=false，会先命中下方的 CC 直转分支。
+		//
+		// 直通模式（passthrough）同样走这里：该类账号的 OpenAI 平台 base_url 与
+		// Anthropic messages 端点同源（见 GetAnthropicProtocolBaseURL 的例外分支），
+		// 从而把 /v1/messages 原样出站，省掉 messages→CC 的整包转换。
 		return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
 	}
 
