@@ -108,7 +108,7 @@
           <div class="max-w-[320px] space-y-1 text-xs">
             <div class="break-all text-gray-700 dark:text-gray-300">
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.inbound') }}:</span>
-              <span class="ml-1">{{ row.inbound_endpoint?.trim() || '-' }}</span>
+              <span class="ml-1">{{ inboundEndpointLabel(row.inbound_endpoint) }}</span>
             </div>
             <div v-if="showUpstreamEndpoint" class="break-all text-gray-700 dark:text-gray-300">
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.upstream') }}:</span>
@@ -314,24 +314,31 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
         </template>
 
-        <!-- 中转开销占比：本站延迟相对上游多出来的百分比 =（本站 − 上游）÷ 上游。
-             紧挨着左侧两列，把「中转加了几成」直接摆在眼前。
+        <!-- 中转开销：本站延迟 − 上游延迟，单位毫秒。
+             上格是首字差值、下格是总耗时差值，与左侧两列的上下顺序一一对应，
+             因此不再重复写「首字 / 总耗时」文字——那既占列宽又无信息量。
 
-             分档按百分比而非毫秒：上游本身要 30 秒时中转再加 2 秒只占 7%，不该与
-             「上游 1 秒、中转再加 2 秒」（+200%）显示成同一色。
+             用差值而不是百分比：上游值一旦很小，比值会爆炸成几百个百分点，
+             反而看不出绝对量；排障要回答的是「中转吃掉了多少毫秒」。
 
-             任一侧没取到就显示「—」：0% 的含义是「完全没有中转开销」，与「还不知道」
-             正好相反，不能互相顶替。 -->
+             任一侧没取到就显示「—」：0 的含义是「完全没有中转开销」，
+             与「还不知道」正好相反，不能互相顶替。 -->
         <template #cell-upstream_overhead="{ row }">
-          <div v-if="overheadFirst(row) != null || overheadDuration(row) != null" class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-xs">
-            <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyFirstToken') }}</span>
-            <span v-if="overheadFirst(row) != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[overheadRatioSeverity(overheadFirst(row)!)]">
-              {{ formatOverheadPercent(overheadFirst(row)!) }}
+          <div v-if="overheadFirst(row) != null || overheadDuration(row) != null" class="grid gap-y-0.5 text-xs">
+            <span
+              v-if="overheadFirst(row) != null"
+              class="font-medium tabular-nums"
+              :class="LATENCY_TEXT_CLASSES[firstTokenOverheadSeverity(overheadFirst(row)!)]"
+            >
+              {{ formatOverheadMs(overheadFirst(row)!) }}
             </span>
             <span v-else class="text-gray-400 dark:text-gray-500">-</span>
-            <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
-            <span v-if="overheadDuration(row) != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[overheadRatioSeverity(overheadDuration(row)!)]">
-              {{ formatOverheadPercent(overheadDuration(row)!) }}
+            <span
+              v-if="overheadDuration(row) != null"
+              class="font-medium tabular-nums"
+              :class="LATENCY_TEXT_CLASSES[durationOverheadSeverity(overheadDuration(row)!)]"
+            >
+              {{ formatOverheadMs(overheadDuration(row)!) }}
             </span>
             <span v-else class="text-gray-400 dark:text-gray-500">-</span>
           </div>
@@ -632,10 +639,11 @@ import {
   LATENCY_BAR_FROM_CLASSES,
   LATENCY_BAR_TO_CLASSES,
   LATENCY_TEXT_CLASSES,
+  durationOverheadSeverity,
   durationSeverity,
+  firstTokenOverheadSeverity,
   firstTokenSeverity,
-  overheadRatioSeverity,
-  upstreamOverheadPercent,
+  upstreamOverheadMs,
 } from '@/utils/latencyHealth'
 import {
   BILLING_MODE_TOKEN,
@@ -867,22 +875,35 @@ const formatDuration = (ms: number | null | undefined): string => {
   return `${Math.floor(totalSec / 3600)}h ${Math.floor((totalSec % 3600) / 60)}m`
 }
 
-// 中转开销占比：把「本站 − 上游」换算成相对上游的百分比。
+// 中转开销：本站延迟减去上游延迟（毫秒）。
 //
 // 拆成两个具名函数而不是在模板里现算，是为了让 v-if 与取值用同一个入口，
 // 避免两处判断条件写歪（例如 v-if 用首字、显示却用总耗时）。
 const overheadFirst = (
   row: Pick<AdminUsageLog, 'first_token_ms' | 'upstream_first_token_ms'>,
-): number | null => upstreamOverheadPercent(row.first_token_ms, row.upstream_first_token_ms)
+): number | null => upstreamOverheadMs(row.first_token_ms, row.upstream_first_token_ms)
 
 const overheadDuration = (
   row: Pick<AdminUsageLog, 'duration_ms' | 'upstream_duration_ms'>,
-): number | null => upstreamOverheadPercent(row.duration_ms, row.upstream_duration_ms)
+): number | null => upstreamOverheadMs(row.duration_ms, row.upstream_duration_ms)
 
-// 占比一律两位小数，正数显式带「+」：纵向扫视时一眼分得清「中转加了几成」
-// 还是「本站反而更快」，不必逐字去数小数点。
-const formatOverheadPercent = (pct: number): string =>
-  `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
+// 毫秒差值：正数显式带「+」，纵向扫视时一眼分得清「中转多花了几毫秒」
+// 还是「本站反而更快」。单位写在表头，单元格里只放数字，省列宽。
+const formatOverheadMs = (ms: number): string => `${ms > 0 ? '+' : ''}${ms}`
+
+// 内部探针的入站标记是「伪路径」，是给后端过滤用的（usage_logs.inbound_endpoint），
+// 直接摊在表里没人看得懂。这里只做**显示层**翻译，不改数据本身 ——
+// 原始值仍可通过导出的 Excel 看到，也仍是筛选条件。
+const INBOUND_ENDPOINT_LABELS: Record<string, string> = {
+  'internal://channel-monitor': '渠道监控探针',
+  'internal://intelligence-check': '智力检测探针',
+}
+
+const inboundEndpointLabel = (raw: string | null | undefined): string => {
+  const value = (raw ?? '').trim()
+  if (!value) return '-'
+  return INBOUND_ENDPOINT_LABELS[value] ?? value
+}
 
 // Cost tooltip functions
 const showTooltip = (event: MouseEvent, row: AdminUsageLog) => {

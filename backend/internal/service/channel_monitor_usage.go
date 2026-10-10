@@ -189,6 +189,13 @@ func (r *ChannelMonitorUsageRecorder) record(ctx context.Context, m *ChannelMoni
 		if requestID := strings.TrimSpace(res.UpstreamRequestID); requestID != "" {
 			usageLog.UpstreamRequestID = &requestID
 		}
+		// 记录真实打到的上游端点：使用记录页的「上游」列读的就是它。
+		// 探针按模板直连原生协议端点，所以这里填的是真实协议（chat/completions/
+		// responses/messages），不是推断值；留空会让该列显示成「-」，
+		// 管理员无法判断这次探针到底验的是哪条协议链路。
+		if endpoint := strings.TrimSpace(res.UpstreamEndpoint); endpoint != "" {
+			usageLog.UpstreamEndpoint = &endpoint
+		}
 		writeUsageLogBestEffort(usageCtx, r.usageLogRepo, usageLog, channelMonitorUsageLogComponent)
 		wrote++
 	}

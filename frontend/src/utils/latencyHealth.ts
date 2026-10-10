@@ -38,45 +38,55 @@ export const durationSeverity = (ms: number): LatencySeverity =>
   classify(ms, DURATION_THRESHOLDS_MS)
 
 /**
- * 中转开销占比的分档阈值（百分比）。
+ * 中转开销（毫秒）的分档阈值。
  *
- * 与上面两组**绝对时间**阈值不同：那两组衡量「这次请求慢不慢」，本组衡量
- * 「中转本身重不重」。所以阈值按百分比而不是毫秒——上游本身要 30 秒的请求，
- * 中转再加 2 秒只占 7%，不该和「上游 1 秒、中转再加 2 秒」显示成同一档。
+ * 与上面两组**绝对延迟**阈值不同：那两组衡量「这次请求慢不慢」，本组衡量
+ * 「中转自己吃掉了多少」——这是**本可以避免**的那部分，所以容忍度低得多。
  *
- * 分档依据（相对上游的增幅）：
- *   ≤10%   几乎无中转开销
- *   10~30% 有可感开销，仍属正常区间
- *   30~60% 中转明显偏重，值得关注
- *   >60%   中转开销接近甚至超过上游本身，应排查
+ * 首字开销（中转在供应商首字基础上多加的毫秒数）：
+ *   ≤300ms   无感
+ *   300~1s   略可感
+ *   1~3s     明显偏重，值得关注
+ *   >3s      严重，中转已成瓶颈
  *
- * 负值（本站比上游还快，通常是采样/时钟差异）一律归入 good。
+ * 总耗时开销的阈值放宽一档：总耗时本身量级更大，且流式响应里几百毫秒的
+ * 调度差异属于正常抖动。
+ *
+ * 负值（本站比上游还快，通常是时钟或采样差异）一律归入 good。
  */
-export const OVERHEAD_RATIO_PCT_THRESHOLDS = {
-  warn: 10,
-  slow: 30,
-  critical: 60,
+export const FIRST_TOKEN_OVERHEAD_MS_THRESHOLDS = {
+  warn: 300,
+  slow: 1_000,
+  critical: 3_000,
 } as const
 
-export const overheadRatioSeverity = (pct: number): LatencySeverity =>
-  classify(pct, OVERHEAD_RATIO_PCT_THRESHOLDS)
+export const DURATION_OVERHEAD_MS_THRESHOLDS = {
+  warn: 1_000,
+  slow: 3_000,
+  critical: 10_000,
+} as const
+
+export const firstTokenOverheadSeverity = (ms: number): LatencySeverity =>
+  classify(ms, FIRST_TOKEN_OVERHEAD_MS_THRESHOLDS)
+
+export const durationOverheadSeverity = (ms: number): LatencySeverity =>
+  classify(ms, DURATION_OVERHEAD_MS_THRESHOLDS)
 
 /**
- * 计算「本站延迟相对上游延迟多出来的百分比」，保留两位小数。
+ * 计算「中转开销」= 本站延迟 − 上游延迟，单位毫秒。
  *
- * 分母取**上游值**：这个数的含义是「中转在供应商基础上加了几成」，
- * 是排障时用来判断中转是否成为瓶颈的指标。
+ * 用差值而不是百分比：分母（上游值）一旦很小，比值就会爆炸成几百上千个百分点，
+ * 反而看不出绝对量；排障时真正要回答的是「中转吃掉了多少毫秒」。
  *
- * 任一侧缺失（尚未对账到上游数据）或上游为 0 时返回 null——
- * 返回 0 会被读成「完全没有中转开销」，与「还不知道」正好相反。
+ * 任一侧缺失（上游账单尚未对账到）时返回 null —— 返回 0 会被读成
+ * 「完全没有中转开销」，与「还不知道」正好相反。
  */
-export const upstreamOverheadPercent = (
+export const upstreamOverheadMs = (
   siteMs: number | null | undefined,
   upstreamMs: number | null | undefined,
 ): number | null => {
   if (siteMs == null || upstreamMs == null) return null
-  if (upstreamMs <= 0) return null
-  return Number((((siteMs - upstreamMs) / upstreamMs) * 100).toFixed(2))
+  return Math.round(siteMs - upstreamMs)
 }
 
 export const LATENCY_TEXT_CLASSES: Record<LatencySeverity, string> = {

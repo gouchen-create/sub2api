@@ -122,52 +122,74 @@ describe('使用记录「上游延迟」列', () => {
   })
 })
 
-describe('使用记录「延迟差比」列', () => {
+describe('使用记录「延迟差值」列', () => {
   // 同样只渲染本列，避免相邻列的同款配色让断言失真。
-  const OVERHEAD_ONLY = [{ key: 'upstream_overhead', label: '延迟差比' }]
+  const OVERHEAD_ONLY = [{ key: 'upstream_overhead', label: '延迟差值(ms)' }]
 
-  it('按 (本站 − 上游) ÷ 上游 计算，固定两位小数并带符号', () => {
+  it('显示本站与上游的毫秒差值，正负带符号', () => {
     const wrapper = mount(UsageTable as never, mountOptions(
       [{
         ...baseRow,
         first_token_ms: 1500,
-        upstream_first_token_ms: 1000, // +50.00%
+        upstream_first_token_ms: 1000, // +500
         duration_ms: 800,
-        upstream_duration_ms: 1000, // −20.00%
+        upstream_duration_ms: 1000, // −200
       }],
       OVERHEAD_ONLY,
     ) as never)
 
     const text = wrapper.text()
-    expect(text).toContain('+50.00%')
-    expect(text).toContain('-20.00%')
+    expect(text).toContain('+500')
+    expect(text).toContain('-200')
+    // 单位在表头，单元格里只放数字，不再出现百分号。
+    expect(text).not.toContain('%')
   })
 
-  it('未对账到上游数据时显示破折号，而不是 0%', () => {
+  it('不再重复渲染「首字 / 总耗时」文字标签', () => {
+    // 上下两格与左侧「延迟」列的顺序一一对应，标签写在这里只会白占列宽。
+    // i18n 在本用例里被桩成「原样返回 key」，所以 key 不出现即证明标签没有被渲染。
+    const wrapper = mount(UsageTable as never, mountOptions(
+      [{
+        ...baseRow,
+        first_token_ms: 1500,
+        upstream_first_token_ms: 1000,
+        duration_ms: 900,
+        upstream_duration_ms: 1000,
+      }],
+      OVERHEAD_ONLY,
+    ) as never)
+
+    const text = wrapper.text()
+    expect(text).not.toContain('usage.latencyFirstToken')
+    expect(text).not.toContain('usage.latencyDuration')
+  })
+
+  it('未对账到上游数据时显示破折号，而不是 0', () => {
     const wrapper = mount(UsageTable as never, mountOptions(
       [{ ...baseRow, first_token_ms: 1500, duration_ms: 3000, upstream_first_token_ms: null, upstream_duration_ms: null }],
       OVERHEAD_ONLY,
     ) as never)
 
     const text = wrapper.text()
-    // 0.00% 会被读成「完全没有中转开销」，与「还不知道」正好相反。
-    expect(text).not.toContain('0.00%')
+    // 0 会被读成「完全没有中转开销」，与「还不知道」正好相反。
+    expect(text).not.toContain('+0')
     expect(text).toContain('—')
   })
 
-  it('比值越大颜色越重：+5% 绿、+200% 红', () => {
+  it('差值越大颜色越重：+50ms 绿、+2000ms 红', () => {
     const small = mount(UsageTable as never, mountOptions(
       [{ ...baseRow, first_token_ms: 1050, upstream_first_token_ms: 1000 }],
       OVERHEAD_ONLY,
     ) as never)
-    expect(small.text()).toContain('+5.00%')
+    expect(small.text()).toContain('+50')
     expect(small.html()).toContain('text-emerald-600')
 
+    // 首字开销 2000ms 落在 1~3s 档 ⇒ slow（橙）；要断言红需 ≥3s。
     const large = mount(UsageTable as never, mountOptions(
-      [{ ...baseRow, first_token_ms: 3000, upstream_first_token_ms: 1000 }],
+      [{ ...baseRow, first_token_ms: 4000, upstream_first_token_ms: 1000 }],
       OVERHEAD_ONLY,
     ) as never)
-    expect(large.text()).toContain('+200.00%')
+    expect(large.text()).toContain('+3000')
     expect(large.html()).toContain('text-red-600')
   })
 })

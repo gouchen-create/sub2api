@@ -528,9 +528,9 @@ export default {
       // "Upstream" because the two columns use different scopes and are not
       // directly comparable in size.
       upstreamLatency: 'Upstream Latency',
-      // Labeled as a "diff" rather than a "ratio" so it reads as the subtraction
-      // of the two latency columns; positive means the relay is slower.
-      upstreamOverhead: 'Latency Diff',
+      // Unit lives in the header so cells stay narrow; "Diff" makes it clear this
+      // is the subtraction of the two latency columns (positive = relay slower).
+      upstreamOverhead: 'Latency Diff (ms)',
       profit: 'Profit',
       profitMargin: 'Margin',
       totalUpstreamCost: 'Total Cost',

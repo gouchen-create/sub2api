@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,6 +165,8 @@ func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model str
 	res.FirstTokenMs = call.FirstTokenMs
 	res.UpstreamRequestID = monitorUpstreamRequestID(opts, call.Headers)
 	res.Usage = call.Usage
+	// 真实打到的上游路径：探针按模板直连原生端点，这里记录下来供「上游」列展示。
+	res.UpstreamEndpoint = strings.TrimSpace(endpoint)
 	respText := call.Text
 
 	if err != nil {
@@ -651,23 +654,92 @@ func hasNonEmptyBodyValue(v any) bool {
 	}
 }
 
+// monitorRequestGzipMinBytes 是探针请求体启用 gzip 压缩的最小字节数。
+//
+// 与网关 gateway.upstream_request_compression.min_bytes 的默认值保持一致（64KiB）。
+// 探针刻意**不读那份配置**：它的请求体只有几百字节到几 KB，永远够不到这个门槛，
+// 这里保留压缩能力是为了与网关行为一致、并为将来可能出现的大 payload 探针留出通路。
+//
+// ⚠️ 现状：默认探针（一次简短提问）压不到门槛，因此本机制在当下是休眠的；
+// 它不会改变任何现有探针的行为。
+const monitorRequestGzipMinBytes = 64 << 10
+
+// monitorRequestPayload 返回真正要发送的请求体，以及因压缩而需要附加的请求头。
+//
+// 压不小就原样返回：宁可不压，也不要为了一个负收益的改动引入新风险。
+func monitorRequestPayload(payload []byte) ([]byte, map[string]string) {
+	if len(payload) < monitorRequestGzipMinBytes {
+		return payload, nil
+	}
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		return payload, nil
+	}
+	if _, err := zw.Write(payload); err != nil {
+		_ = zw.Close()
+		return payload, nil
+	}
+	if err := zw.Close(); err != nil {
+		return payload, nil
+	}
+	if buf.Len() >= len(payload) {
+		return payload, nil
+	}
+	return buf.Bytes(), map[string]string{"Content-Encoding": "gzip"}
+}
+
+// monitorCompressionRetryable 报告该状态码是否值得「去掉压缩重试一次」。
+//
+// 与网关同一取舍：400 / 415 是上游对请求体的确定性拒绝，而「上游不认
+// Content-Encoding: gzip」正好落在这两个码上，去掉压缩重试一次即可自愈。
+func monitorCompressionRetryable(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnsupportedMediaType
+}
+
+// doMonitorPost 发一次探针 POST，返回原始响应（调用方负责关闭 Body）。
+// accept 决定 Accept 头；extraHeaders 用于附加压缩相关头。
+func doMonitorPost(
+	ctx context.Context,
+	fullURL string,
+	payload []byte,
+	headers map[string]string,
+	extraHeaders map[string]string,
+	accept string,
+) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", accept)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	return monitorHTTPClient().Do(req)
+}
+
 // postRawJSON 发送 POST + 已序列化好的 JSON 字节，限制响应体大小，
 // 返回响应字节、HTTP status、响应头、错误。
 // adapter 自行 marshal 是为了精确控制字段顺序与类型，所以这里直接收 []byte 而不是 any。
 func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers map[string]string) ([]byte, int, http.Header, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	body, extraHeaders := monitorRequestPayload(payload)
 
-	resp, err := monitorHTTPClient().Do(req)
+	resp, err := doMonitorPost(ctx, fullURL, body, headers, extraHeaders, "application/json")
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("do request: %w", err)
+	}
+	if extraHeaders != nil && monitorCompressionRetryable(resp.StatusCode) {
+		// 上游不认 gzip：去掉压缩原样重试一次，别把「我们自己压了」变成「请求失败」。
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, monitorResponseMaxBytes))
+		_ = resp.Body.Close()
+		resp, err = doMonitorPost(ctx, fullURL, payload, headers, nil, "application/json")
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("do request: %w", err)
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -726,19 +798,20 @@ func monitorUpstreamRequestID(opts *CheckOptions, headers http.Header) string {
 // 非 2xx 时仍整包读取响应体，交给上层做错误信息展示。
 func postJSONStream(ctx context.Context, fullURL string, payload []byte, headers map[string]string, kind int) (monitorCallResult, error) {
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
-	if err != nil {
-		return monitorCallResult{}, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	body, extraHeaders := monitorRequestPayload(payload)
 
-	resp, err := monitorHTTPClient().Do(req)
+	resp, err := doMonitorPost(ctx, fullURL, body, headers, extraHeaders, "text/event-stream")
 	if err != nil {
 		return monitorCallResult{}, fmt.Errorf("do request: %w", err)
+	}
+	if extraHeaders != nil && monitorCompressionRetryable(resp.StatusCode) {
+		// 与 postRawJSON 同样的自愈：上游不认 gzip 时去掉压缩重试一次。
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, monitorResponseMaxBytes))
+		_ = resp.Body.Close()
+		resp, err = doMonitorPost(ctx, fullURL, payload, headers, nil, "text/event-stream")
+		if err != nil {
+			return monitorCallResult{}, fmt.Errorf("do request: %w", err)
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -770,6 +843,20 @@ func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, fir
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "data:") {
 				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+
+				// 首字口径必须与网关一致：**收到第一个 SSE 数据块**即计时。
+				//
+				// 这里曾经是「等到第一段正文才计时」，结果与使用记录页的「上游延迟」
+				// （A6 账单口径 = 上游第一个字节）不可比：推理模型会先吐大量 reasoning
+				// 事件，正文可能十几秒后才出现，于是「本站首字」比「上游首字」虚高一个
+				// 完整的推理时长，两者相减得出的「中转开销」能到几秒甚至十几秒，
+				// 而真实的中转开销只有几百毫秒。实测该页监控行「首字后剩余」中位数
+				// 不足 300ms，正是这一口径错位的指纹。
+				if firstTokenMs == nil && data != "" && data != "[DONE]" {
+					ms := int(time.Since(start) / time.Millisecond)
+					firstTokenMs = &ms
+				}
+
 				if data == "[DONE]" {
 					break
 				}
@@ -778,10 +865,6 @@ func readMonitorSSE(body io.Reader, kind int, start time.Time) (text string, fir
 				captureProbeUsage(&usage, parseProbeJSONObject(data))
 				if content, done := monitorStreamContent(kind, data); content != "" || done {
 					if content != "" {
-						if firstTokenMs == nil {
-							ms := int(time.Since(start) / time.Millisecond)
-							firstTokenMs = &ms
-						}
 						_, _ = textBuilder.WriteString(content)
 					}
 					if done {

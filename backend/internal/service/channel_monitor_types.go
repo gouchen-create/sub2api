@@ -172,8 +172,17 @@ type CheckResult struct {
 	StatusCode int
 	// Stream 表示这次探针是否以流式发起（决定记账行的 request_type / stream 口径）。
 	Stream bool
-	// FirstTokenMs 流式探针首个内容块到达耗时；非流式或流里没内容时为 nil。
+	// FirstTokenMs 流式探针首个 **SSE 数据块**到达耗时；非流式或流里没有数据块时为 nil。
+	//
+	// 口径刻意与网关的 first_token_ms 保持一致（首个数据块，而不是首个正文块）：
+	// 使用记录页会把本值与 A6 账单的上游首字相减算「中转开销」，若这里等到正文才计时，
+	// 推理模型下会虚高整个推理时长，得出完全错误的中转开销。
 	FirstTokenMs *int
+	// UpstreamEndpoint 本次探针实际打到的上游路径（/v1/chat/completions 等）。
+	//
+	// 探针按模板直连原生端点，这个值就是它真实使用的协议；写进记账行后，
+	// 使用记录页的「上游」列即可显示真实协议，而不是空白。
+	UpstreamEndpoint string
 	// UpstreamRequestID 直连上游时从响应头读到的请求标识，供 A6 反查真实成本。
 	// 走本地网关的探针不填（那条账由网关自己记）。
 	UpstreamRequestID string

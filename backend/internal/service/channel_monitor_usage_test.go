@@ -237,7 +237,10 @@ func TestChannelMonitorUsageRecordWritesRow(t *testing.T) {
 		Usage:             ProbeUsageTokens{Input: 70, Output: 20, CacheCreation: 5, CacheRead: 30},
 		LatencyMs:         &latency,
 		UpstreamRequestID: "req-1",
-		CheckedAt:         time.Now(),
+		// 探针真实打到的上游端点：使用记录页的「上游」列读的就是它。
+		// 留空会让那一列显示成「-」，管理员就看不出这次探针验的是哪条协议链路。
+		UpstreamEndpoint: "/v1/responses",
+		CheckedAt:        time.Now(),
 	}}
 
 	rec.record(context.Background(), m, results, probe)
@@ -260,9 +263,36 @@ func TestChannelMonitorUsageRecordWritesRow(t *testing.T) {
 	require.Equal(t, 5, log.CacheCreationTokens)
 	require.Equal(t, 30, log.CacheReadTokens)
 	require.Equal(t, "req-1", *log.UpstreamRequestID)
+	require.NotNil(t, log.UpstreamEndpoint)
+	require.Equal(t, "/v1/responses", *log.UpstreamEndpoint)
 	// 纯成本：没有向任何人收费，成本由 A6 反查回填。
 	require.Zero(t, log.TotalCost)
 	require.Zero(t, log.ActualCost)
+}
+
+// 首字口径：**收到第一个 SSE 数据块**即计时，而不是等第一段正文。
+//
+// 这是使用记录页「延迟差」能否成立的前提：上游首字来自 A6 账单（上游第一个字节），
+// 若这里等到正文才计时，推理模型下会虚高整个推理时长 —— 「中转开销」会从几百毫秒
+// 变成几秒甚至十几秒。
+//
+// 本用例刻意构造「整条流里没有任何正文」的流：旧实现在这种流上返回 nil，
+// 新实现返回一个值，因此无需依赖真实计时即可确定性地钉住口径。
+func TestReadMonitorSSEFirstTokenAtFirstDataChunk(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"r1"}}`,
+		"",
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"thinking"}`,
+		"",
+		`data: {"type":"response.completed","response":{}}`,
+		"",
+	}, "\n")
+
+	text, firstTokenMs, _, _ := readMonitorSSE(strings.NewReader(body), monitorStreamResponses, time.Now())
+
+	require.Empty(t, text, "整条流没有正文，正文应为空")
+	require.NotNil(t, firstTokenMs, "首个数据块到达就该记首字，不能等到正文出现")
+	require.GreaterOrEqual(t, *firstTokenMs, 0)
 }
 
 func TestChannelMonitorUsageRecordSkipsNon2xx(t *testing.T) {
