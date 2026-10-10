@@ -94,4 +94,80 @@ describe('使用记录「上游延迟」列', () => {
     // 关键：只要有一项有值就不该整列显示「—」，否则会把「部分取到」误报成「完全没取到」。
     expect(text).not.toContain('—')
   })
+
+  it('沿用「延迟」列同一套健康度配色与色条', () => {
+    // 只渲染「上游延迟」一列：若把相邻的「延迟」列一起渲染，本站那一列的
+    // 同款配色会污染断言——即使本列完全没上色，断言也会通过。
+    const UPSTREAM_ONLY = [{ key: 'upstream_latency', label: '上游延迟' }]
+
+    // 上游首字 2.5s / 总耗时 3s → 两档都是 good。
+    const good = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, upstream_first_token_ms: 2500, upstream_duration_ms: 3000 }],
+      UPSTREAM_ONLY,
+    ) as never)
+    expect(good.html()).toContain('text-emerald-600')
+    // 有色条：首字有值时走渐变色条（上端 from / 下端 to），不是纯色 bg-*。
+    expect(good.html()).toContain('from-emerald-500')
+    expect(good.html()).toContain('to-emerald-500')
+
+    // 上游首字 65s（>60s ⇒ critical）+ 总耗时 310s（>300s ⇒ critical），两端都应变红。
+    // 注意总耗时的阈值是 1min/3min/5min，70s 只到 warn 档，不能拿来断言红色。
+    const bad = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, upstream_first_token_ms: 65_000, upstream_duration_ms: 310_000 }],
+      UPSTREAM_ONLY,
+    ) as never)
+    expect(bad.html()).toContain('text-red-600')
+    expect(bad.html()).toContain('from-red-500')
+    expect(bad.html()).toContain('to-red-500')
+  })
+})
+
+describe('使用记录「延迟差比」列', () => {
+  // 同样只渲染本列，避免相邻列的同款配色让断言失真。
+  const OVERHEAD_ONLY = [{ key: 'upstream_overhead', label: '延迟差比' }]
+
+  it('按 (本站 − 上游) ÷ 上游 计算，固定两位小数并带符号', () => {
+    const wrapper = mount(UsageTable as never, mountOptions(
+      [{
+        ...baseRow,
+        first_token_ms: 1500,
+        upstream_first_token_ms: 1000, // +50.00%
+        duration_ms: 800,
+        upstream_duration_ms: 1000, // −20.00%
+      }],
+      OVERHEAD_ONLY,
+    ) as never)
+
+    const text = wrapper.text()
+    expect(text).toContain('+50.00%')
+    expect(text).toContain('-20.00%')
+  })
+
+  it('未对账到上游数据时显示破折号，而不是 0%', () => {
+    const wrapper = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, first_token_ms: 1500, duration_ms: 3000, upstream_first_token_ms: null, upstream_duration_ms: null }],
+      OVERHEAD_ONLY,
+    ) as never)
+
+    const text = wrapper.text()
+    // 0.00% 会被读成「完全没有中转开销」，与「还不知道」正好相反。
+    expect(text).not.toContain('0.00%')
+    expect(text).toContain('—')
+  })
+
+  it('比值越大颜色越重：+5% 绿、+200% 红', () => {
+    const small = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, first_token_ms: 1050, upstream_first_token_ms: 1000 }],
+      OVERHEAD_ONLY,
+    ) as never)
+    expect(small.text()).toContain('+5.00%')
+    expect(small.html()).toContain('text-emerald-600')
+
+    const large = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, first_token_ms: 3000, upstream_first_token_ms: 1000 }],
+      OVERHEAD_ONLY,
+    ) as never)
+    expect(large.text()).toContain('+200.00%')
+    expect(large.html()).toContain('text-red-600')
+  })
 })

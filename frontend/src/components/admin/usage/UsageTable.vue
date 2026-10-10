@@ -294,18 +294,44 @@
              P50≈13s、P99≈599s），刚发出的请求这列本来就是空的；若显示 0 会被读成
              「上游瞬间返回」，与「还不知道」的排障结论完全相反。 -->
         <template #cell-upstream_latency="{ row }">
-          <div
-            v-if="row.upstream_first_token_ms != null || row.upstream_duration_ms != null"
-            class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-xs"
-          >
+          <div v-if="row.upstream_first_token_ms != null || row.upstream_duration_ms != null" class="flex items-stretch gap-2">
+            <span
+              class="w-1 shrink-0 rounded-full"
+              :class="row.upstream_first_token_ms != null
+                ? ['bg-gradient-to-b from-40% to-60%', LATENCY_BAR_FROM_CLASSES[firstTokenSeverity(row.upstream_first_token_ms)], LATENCY_BAR_TO_CLASSES[durationSeverity(row.upstream_duration_ms ?? 0)]]
+                : LATENCY_BAR_CLASSES[durationSeverity(row.upstream_duration_ms ?? 0)]"
+              aria-hidden="true"
+            ></span>
+            <div class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-xs">
+              <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyFirstToken') }}</span>
+              <span v-if="row.upstream_first_token_ms != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[firstTokenSeverity(row.upstream_first_token_ms)]">{{ formatDuration(row.upstream_first_token_ms) }}</span>
+              <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+              <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
+              <span v-if="row.upstream_duration_ms != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(row.upstream_duration_ms ?? 0)]">{{ formatDuration(row.upstream_duration_ms) }}</span>
+              <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+            </div>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
+        <!-- 中转开销占比：本站延迟相对上游多出来的百分比 =（本站 − 上游）÷ 上游。
+             紧挨着左侧两列，把「中转加了几成」直接摆在眼前。
+
+             分档按百分比而非毫秒：上游本身要 30 秒时中转再加 2 秒只占 7%，不该与
+             「上游 1 秒、中转再加 2 秒」（+200%）显示成同一色。
+
+             任一侧没取到就显示「—」：0% 的含义是「完全没有中转开销」，与「还不知道」
+             正好相反，不能互相顶替。 -->
+        <template #cell-upstream_overhead="{ row }">
+          <div v-if="overheadFirst(row) != null || overheadDuration(row) != null" class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-xs">
             <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyFirstToken') }}</span>
-            <span v-if="row.upstream_first_token_ms != null" class="font-medium tabular-nums text-gray-700 dark:text-gray-200">
-              {{ formatDuration(row.upstream_first_token_ms) }}
+            <span v-if="overheadFirst(row) != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[overheadRatioSeverity(overheadFirst(row)!)]">
+              {{ formatOverheadPercent(overheadFirst(row)!) }}
             </span>
             <span v-else class="text-gray-400 dark:text-gray-500">-</span>
             <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
-            <span v-if="row.upstream_duration_ms != null" class="font-medium tabular-nums text-gray-700 dark:text-gray-200">
-              {{ formatDuration(row.upstream_duration_ms) }}
+            <span v-if="overheadDuration(row) != null" class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[overheadRatioSeverity(overheadDuration(row)!)]">
+              {{ formatOverheadPercent(overheadDuration(row)!) }}
             </span>
             <span v-else class="text-gray-400 dark:text-gray-500">-</span>
           </div>
@@ -608,6 +634,8 @@ import {
   LATENCY_TEXT_CLASSES,
   durationSeverity,
   firstTokenSeverity,
+  overheadRatioSeverity,
+  upstreamOverheadPercent,
 } from '@/utils/latencyHealth'
 import {
   BILLING_MODE_TOKEN,
@@ -838,6 +866,23 @@ const formatDuration = (ms: number | null | undefined): string => {
   if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`
   return `${Math.floor(totalSec / 3600)}h ${Math.floor((totalSec % 3600) / 60)}m`
 }
+
+// 中转开销占比：把「本站 − 上游」换算成相对上游的百分比。
+//
+// 拆成两个具名函数而不是在模板里现算，是为了让 v-if 与取值用同一个入口，
+// 避免两处判断条件写歪（例如 v-if 用首字、显示却用总耗时）。
+const overheadFirst = (
+  row: Pick<AdminUsageLog, 'first_token_ms' | 'upstream_first_token_ms'>,
+): number | null => upstreamOverheadPercent(row.first_token_ms, row.upstream_first_token_ms)
+
+const overheadDuration = (
+  row: Pick<AdminUsageLog, 'duration_ms' | 'upstream_duration_ms'>,
+): number | null => upstreamOverheadPercent(row.duration_ms, row.upstream_duration_ms)
+
+// 占比一律两位小数，正数显式带「+」：纵向扫视时一眼分得清「中转加了几成」
+// 还是「本站反而更快」，不必逐字去数小数点。
+const formatOverheadPercent = (pct: number): string =>
+  `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`
 
 // Cost tooltip functions
 const showTooltip = (event: MouseEvent, row: AdminUsageLog) => {
