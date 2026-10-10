@@ -315,6 +315,12 @@ export default {
       // Error Detail Modal
       errorDetail: {
         title: '错误详情',
+        // 上游商户：回答「这次失败是哪家上游商户造成的」，并能直接拉黑整个商户。
+        upstreamSupplier: '上游商户',
+        upstreamSupplierUnknown: '未知（请求未到达上游，或已超出上游日志保留窗口）',
+        blockSupplier: '拉黑商户',
+        blockSupplierConfirm: '确定要拉黑商户 {name}（ID {id}）吗？该商户名下所有渠道都会退出路由，且它名下的固定绑定不会自动改绑，需要你另行处理。',
+        blockSupplierOk: '已拉黑该商户',
         titleWithId: '错误 #{id}',
         noErrorSelected: '未选择错误。',
         backToList: '返回列表',

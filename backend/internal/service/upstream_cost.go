@@ -128,6 +128,24 @@ type UpstreamCostRepository interface {
 	// UpstreamCostCollectorConfig.SweepLookback 的说明）。
 	// 只清 upstream_cost_attempts，不碰金额与 fetched_at。
 	RequeueExhaustedCosts(ctx context.Context, since time.Time, until time.Time, maxAttempts int, limit int) (int64, error)
+	// ListOpsSupplierBackfill 取最近「已知上游请求 ID、但还不知道是哪家商户」的
+	// ops 错误日志，供反查后回填。按 created_at 升序，早的优先。
+	//
+	// 存在的理由：渠道监控探针失败时只来得及存下上游请求 ID（那一刻还没查商户），
+	// 而「是哪家商户打回的」决定了能不能一键拉黑。见 channel_monitor_error_log.go。
+	ListOpsSupplierBackfill(ctx context.Context, since time.Time, limit int) ([]OpsSupplierBackfill, error)
+	// ResolveOpsSupplier 把反查到的上游商户回填到一条 ops 错误日志上。
+	// supplierID 为 nil 表示「上游确实查不到」（例如请求根本没到达上游，或已超出
+	// 上游失败日志的保留窗口），此时只写名字（可能为空），不写 ID。
+	ResolveOpsSupplier(ctx context.Context, opsLogID int64, supplierID *int, supplierName string) error
+}
+
+// OpsSupplierBackfill 是一条等待回填上游商户的 ops 错误日志。
+type OpsSupplierBackfill struct {
+	// ID ops_error_logs 主键。
+	ID int64
+	// UpstreamRequestID 上游返回的请求标识，用于反查商户。
+	UpstreamRequestID string
 }
 
 // UpstreamCostCollectorConfig 是取数任务的调度参数。
@@ -250,6 +268,10 @@ type UpstreamCostResult struct {
 	Exhausted int
 	// Failed 查询本身失败（网络/鉴权/上游异常）的条数。
 	Failed int
+	// SupplierResolved 本轮为 ops 错误日志回填上的上游商户数。
+	SupplierResolved int
+	// SupplierFaults 本轮回填商户时查询失败的条数（与 Failed 同理，不计入重试预算）。
+	SupplierFaults int
 }
 
 // RunOnce 执行一轮取数。返回的错误只表示「这一轮整体无法进行」，
@@ -284,7 +306,66 @@ func (s *UpstreamCostService) RunOnce(ctx context.Context, now time.Time) (Upstr
 		}
 		s.resolveOne(ctx, item, &result)
 	}
+	// 顺带把「探针失败但还不知道是哪家商户」的错误日志补上商户。
+	// 放在成本取数之后：成本对账是主职责，回填是搭车的旁路。
+	s.backfillOpsSuppliers(ctx, now, &result)
 	return result, nil
+}
+
+// upstreamSupplierBackfillWindow 只回填最近这段时间内的失败记录。
+//
+// 与上游「失败类日志」的短保留窗口匹配（实测约 405 条）：晚于这个窗口的，
+// 即便当时存在也早已滚掉，继续查只是白跑上游接口、白占一轮的耗时。
+// 取 10 分钟 —— 取数循环 30 秒一轮，足够重试约 20 次，覆盖上游落库延迟绰绰有余。
+const upstreamSupplierBackfillWindow = 10 * time.Minute
+
+// upstreamSupplierBackfillBatch 单轮回填条数上限。
+//
+// 必须封顶：一次上游故障可能瞬间产生成百条失败探针，不封顶就会在同一个 tick 里
+// 对上游连发那么多次请求。超出的留到下一轮。
+const upstreamSupplierBackfillBatch = 50
+
+// backfillOpsSuppliers 为「已知上游请求 ID、但还不知道商户」的 ops 错误日志反查商户。
+//
+// 为什么由成本取数任务兼任：它是唯一既有 A6 客户端、又有 30 秒周期循环的地方，
+// 而 A6 客户端在 wire 图中比渠道监控服务更晚构造，探针侧拿不到它。
+//
+// best-effort：任何失败都只计入统计与日志，绝不影响成本对账本身。
+func (s *UpstreamCostService) backfillOpsSuppliers(ctx context.Context, now time.Time, result *UpstreamCostResult) {
+	if s == nil || s.repo == nil || s.client == nil || !s.client.Configured() {
+		return
+	}
+	items, err := s.repo.ListOpsSupplierBackfill(ctx, now.Add(-upstreamSupplierBackfillWindow), upstreamSupplierBackfillBatch)
+	if err != nil {
+		logger.LegacyPrintf(upstreamCostLogComponent, "upstream_supplier_backfill_list_failed: err=%v", err)
+		return
+	}
+	for i := range items {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		item := &items[i]
+		info, found, err := s.client.FetchFailureByRequestID(ctx, item.UpstreamRequestID)
+		if err != nil {
+			// 查询本身失败（网络/鉴权）：**不写库**，留到下一轮再试，
+			// 否则一次上游抖动会把"暂时查不到"永久固化成"确认无商户"。
+			result.SupplierFaults++
+			continue
+		}
+		var supplierID *int
+		supplierName := ""
+		if found {
+			supplierID = info.SupplierID
+			supplierName = info.SupplierName
+		}
+		if err := s.repo.ResolveOpsSupplier(ctx, item.ID, supplierID, supplierName); err != nil {
+			result.SupplierFaults++
+			continue
+		}
+		if found && supplierID != nil {
+			result.SupplierResolved++
+		}
+	}
 }
 
 // resolveOne 处理单条记录，把结果累加进 result。
@@ -621,8 +702,9 @@ func (c *UpstreamCostCollector) tick() {
 	// 把错误日志和告警全部带偏。因此刻意用 `query_faults` 这个不含触发词的名字。
 	if result.Examined > 0 {
 		logger.LegacyPrintf(upstreamCostLogComponent,
-			"upstream_cost_round_done: examined=%d resolved=%d retried=%d exhausted=%d query_faults=%d elapsed=%s",
+			"upstream_cost_round_done: examined=%d resolved=%d retried=%d exhausted=%d query_faults=%d supplier_resolved=%d supplier_faults=%d elapsed=%s",
 			result.Examined, result.Resolved, result.Retried, result.Exhausted, result.Failed,
+			result.SupplierResolved, result.SupplierFaults,
 			time.Since(start).Round(time.Millisecond))
 	}
 }

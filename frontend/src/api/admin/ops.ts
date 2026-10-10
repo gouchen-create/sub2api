@@ -938,6 +938,15 @@ export interface OpsErrorLog {
   request_type?: number | null
   user_agent?: string
 
+  /**
+   * 打回这次请求的上游商户（如 A6 的 marketplace_supplier_id）。
+   *
+   * 只有「请求确实到达了上游并被拒绝」时才可能有值：网络层失败上游没收到，
+   * 且上游对失败类日志只保留很短一段，超出窗口也补不回来 —— 此时为空是正常的。
+   */
+  upstream_supplier_id?: number | null
+  upstream_supplier_name?: string
+
 }
 
 export interface OpsErrorDetail extends OpsErrorLog {

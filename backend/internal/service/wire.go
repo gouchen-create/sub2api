@@ -1073,6 +1073,7 @@ func ProvideChannelMonitorRunner(
 	settingService *SettingService,
 	quotaFetcher *ChannelMonitorQuotaFetcher,
 	usageRecorder *ChannelMonitorUsageRecorder,
+	opsService *OpsService,
 	lockCache LeaderLockCache,
 	db *sql.DB,
 ) *ChannelMonitorRunner {
@@ -1084,6 +1085,10 @@ func ProvideChannelMonitorRunner(
 		svc.SetScheduler(r)
 		svc.SetQuotaFetcher(quotaFetcher)
 		svc.SetUsageRecorder(usageRecorder)
+		// 探针失败要能在「错误请求」页看到，因此也需要 ops 错误日志写入能力。
+		// 注意顺序：A6 客户端在 wire 图中晚于本 provider 构造，所以「反查是哪家
+		// 上游商户打回的」不在这里做——这里只存上游请求 ID，由对账循环随后回填。
+		svc.SetErrorRecorder(NewChannelMonitorErrorRecorder(opsService))
 	}
 	// 多实例选主：探针会真花钱、真写使用记录，必须保证同一时刻只有一个实例在探。
 	r.SetLeaderLock(lockCache, db)

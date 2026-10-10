@@ -50,6 +50,7 @@ INSERT INTO ops_error_logs (
   upstream_error_detail,
   upstream_supplier_id,
   upstream_supplier_name,
+  upstream_request_id,
   upstream_errors,
   auth_latency_ms,
   routing_latency_ms,
@@ -59,7 +60,7 @@ INSERT INTO ops_error_logs (
   created_at,
   api_key_prefix
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
 )`
 
 func NewOpsRepository(db *sql.DB) service.OpsRepository {
@@ -163,6 +164,7 @@ func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
 		opsNullString(input.UpstreamErrorDetail),
 		opsNullableIntPointer(input.UpstreamSupplierID),
 		opsNullString(input.UpstreamSupplierName),
+		opsNullString(input.UpstreamRequestID),
 		opsNullString(input.UpstreamErrorsJSON),
 		opsNullInt64(input.AuthLatencyMs),
 		opsNullInt64(input.RoutingLatencyMs),
@@ -271,7 +273,9 @@ SELECT
   COALESCE(e.user_agent, ''),
   e.request_type,
   COALESCE(ak.name, ''),
-  ak.deleted_at
+  ak.deleted_at,
+  e.upstream_supplier_id,
+  COALESCE(e.upstream_supplier_name, '')
 FROM ops_error_logs e
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
@@ -306,6 +310,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		var requestType sql.NullInt64
 		var apiKeyName string
 		var apiKeyDeletedAt sql.NullTime
+		var upstreamSupplierID sql.NullInt64
 		if err := rows.Scan(
 			&item.ID,
 			&item.CreatedAt,
@@ -342,8 +347,14 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&requestType,
 			&apiKeyName,
 			&apiKeyDeletedAt,
+			&upstreamSupplierID,
+			&item.UpstreamSupplierName,
 		); err != nil {
 			return nil, err
+		}
+		if upstreamSupplierID.Valid {
+			v := int(upstreamSupplierID.Int64)
+			item.UpstreamSupplierID = &v
 		}
 		if resolvedAt.Valid {
 			t := resolvedAt.Time
@@ -453,7 +464,9 @@ SELECT
   e.time_to_first_token_ms,
   COALESCE(e.api_key_prefix, ''),
   COALESCE(ak.name, ''),
-  ak.deleted_at
+  ak.deleted_at,
+  e.upstream_supplier_id,
+  COALESCE(e.upstream_supplier_name, '')
 FROM ops_error_logs e
 LEFT JOIN users u ON e.user_id = u.id
 LEFT JOIN accounts a ON e.account_id = a.id
@@ -480,6 +493,7 @@ LIMIT 1`
 	var requestType sql.NullInt64
 	var detailAPIKeyName string
 	var detailAPIKeyDeletedAt sql.NullTime
+	var detailUpstreamSupplierID sql.NullInt64
 
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
 		&out.ID,
@@ -528,9 +542,15 @@ LIMIT 1`
 		&out.APIKeyPrefix,
 		&detailAPIKeyName,
 		&detailAPIKeyDeletedAt,
+		&detailUpstreamSupplierID,
+		&out.UpstreamSupplierName,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if detailUpstreamSupplierID.Valid {
+		v := int(detailUpstreamSupplierID.Int64)
+		out.UpstreamSupplierID = &v
 	}
 
 	out.StatusCode = int(statusCode.Int64)

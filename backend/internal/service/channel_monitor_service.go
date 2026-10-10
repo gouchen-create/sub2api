@@ -89,6 +89,10 @@ type ChannelMonitorService struct {
 	// usageRecorder 由 wire 通过 SetUsageRecorder 注入：给「直连上游」的探针补记
 	// 使用记录（见 channel_monitor_usage.go）。nil 时全部变成空操作，探针照常跑。
 	usageRecorder *ChannelMonitorUsageRecorder
+	// errorRecorder 由 wire 通过 SetErrorRecorder 注入：把探针的**失败**补记进
+	// ops_error_logs，使失败能在「错误请求」页被看到（见 channel_monitor_error_log.go）。
+	// nil 时全部变成空操作，探针照常跑。
+	errorRecorder *ChannelMonitorErrorRecorder
 }
 
 const maxChannelMonitorNameRunes = 100
@@ -686,6 +690,8 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 	s.persistCheckResults(ctx, m, results)
 	// 记账是 best-effort：写失败只记日志，绝不影响探针结果与历史。
 	s.usageRecorder.record(ctx, m, results, probeUsage)
+	// 失败也要在「错误请求」页可见，同样是 best-effort。
+	s.errorRecorder.record(ctx, m, results)
 	return results, nil
 }
 
@@ -810,6 +816,17 @@ func (s *ChannelMonitorService) SetUsageRecorder(recorder *ChannelMonitorUsageRe
 		return
 	}
 	s.usageRecorder = recorder
+}
+
+// SetErrorRecorder 由 wire 注入「探针失败写错误日志」的记录器。
+//
+// 走 setter 注入的理由与 usageRecorder 相同：OpsService 虽然在 wire 图中更早构造，
+// 但把 runner 的全部依赖一次注入，比让本服务多一个构造参数更容易看清装配关系。
+func (s *ChannelMonitorService) SetErrorRecorder(recorder *ChannelMonitorErrorRecorder) {
+	if s == nil {
+		return
+	}
+	s.errorRecorder = recorder
 }
 
 // ListEnabledMonitors 返回所有 enabled=true 的监控（解密后），供 runner 启动时建立任务表。

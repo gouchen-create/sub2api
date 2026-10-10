@@ -114,6 +114,12 @@ type OpsInsertErrorLogInput struct {
 	UpstreamSupplierID *int
 	// UpstreamSupplierName 上游商户名，冗余存一份供页面直接显示。
 	UpstreamSupplierName string
+	// UpstreamRequestID 上游（A6）返回的请求标识，用于事后按 ID 反查是哪家商户。
+	//
+	// 与 request_id / client_request_id 是**三件不同的事**：那两个是本系统自己的
+	// 请求 ID，这个是上游给的。监控探针失败时拿不到商户信息（写入那一刻还没查），
+	// 于是先把它存下来，由对账循环随后按它去上游反查商户并回填。
+	UpstreamRequestID string
 	// UpstreamErrors captures all upstream error attempts observed during handling this request.
 	// It is populated during request processing (gin context) and sanitized+serialized by OpsService.
 	UpstreamErrors []*OpsUpstreamErrorEvent

@@ -14,8 +14,14 @@
 
 ALTER TABLE ops_error_logs ADD COLUMN IF NOT EXISTS upstream_supplier_id INTEGER;
 ALTER TABLE ops_error_logs ADD COLUMN IF NOT EXISTS upstream_supplier_name TEXT;
+-- 上游请求 ID：监控探针失败那一刻还查不到商户（要再打一次上游接口），
+-- 先把 ID 存下来，由对账循环随后按它反查并回填上面两列。
+-- 宽度与 usage_logs.upstream_request_id 保持一致。
+ALTER TABLE ops_error_logs ADD COLUMN IF NOT EXISTS upstream_request_id VARCHAR(128);
 
 COMMENT ON COLUMN ops_error_logs.upstream_supplier_id IS
   '打回该请求的上游商户 ID（A6 marketplace_supplier_id）；网络层失败或超出上游失败日志保留窗口时为空';
 COMMENT ON COLUMN ops_error_logs.upstream_supplier_name IS
   '上游商户名，冗余存储供页面直接显示';
+COMMENT ON COLUMN ops_error_logs.upstream_request_id IS
+  '上游返回的请求 ID；对账循环据此反查上游商户并回填 upstream_supplier_id/name';

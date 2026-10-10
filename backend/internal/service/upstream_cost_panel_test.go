@@ -36,6 +36,17 @@ type upstreamCostRepoStub struct {
 	requeueCalls  []upstreamCostRequeueCall
 	requeueResult int64
 	requeueErr    error
+
+	// 「给探针失败回填上游商户」这条旁路的数据。
+	// 绝大多数用例不关心它，默认零值即可安全跳过（list 返回空）。
+	opsBackfill []OpsSupplierBackfill
+	opsResolved map[int64]OpsSupplierBackfillResult
+}
+
+// OpsSupplierBackfillResult 记录一次回填写入，供断言使用。
+type OpsSupplierBackfillResult struct {
+	SupplierID   *int
+	SupplierName string
 }
 
 // upstreamCostRequeueCall 记下一次补账调用收到的参数，供断言窗口与封顶值。
@@ -89,6 +100,24 @@ func (r *upstreamCostRepoStub) requeueCallsSnapshot() []upstreamCostRequeueCall 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]upstreamCostRequeueCall(nil), r.requeueCalls...)
+}
+
+// ListOpsSupplierBackfill 默认返回空：绝大多数用例不关心「给探针失败回填商户」
+// 这条旁路，给它一个安全的空实现，避免每个用例都被迫准备数据。
+func (r *upstreamCostRepoStub) ListOpsSupplierBackfill(_ context.Context, _ time.Time, _ int) ([]OpsSupplierBackfill, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]OpsSupplierBackfill(nil), r.opsBackfill...), nil
+}
+
+func (r *upstreamCostRepoStub) ResolveOpsSupplier(_ context.Context, opsLogID int64, supplierID *int, supplierName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.opsResolved == nil {
+		r.opsResolved = map[int64]OpsSupplierBackfillResult{}
+	}
+	r.opsResolved[opsLogID] = OpsSupplierBackfillResult{SupplierID: supplierID, SupplierName: supplierName}
+	return nil
 }
 
 func (r *upstreamCostRepoStub) resolvedValue(id int64) (UpstreamCostValue, bool) {

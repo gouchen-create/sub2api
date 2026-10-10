@@ -315,6 +315,13 @@ export default {
       // Error Detail Modal
       errorDetail: {
         title: 'Error Detail',
+        // Upstream supplier: answers "which supplier caused this failure" and
+        // lets the operator block that whole supplier right here.
+        upstreamSupplier: 'Upstream Supplier',
+        upstreamSupplierUnknown: 'Unknown (request never reached upstream, or the upstream log window has passed)',
+        blockSupplier: 'Block supplier',
+        blockSupplierConfirm: 'Block the entire supplier {name} (ID {id})? All of its channels will leave routing, and its pinned bindings will NOT be rebind automatically.',
+        blockSupplierOk: 'Supplier blocked',
         titleWithId: 'Error #{id}',
         noErrorSelected: 'No error selected.',
         backToList: 'Back to List',

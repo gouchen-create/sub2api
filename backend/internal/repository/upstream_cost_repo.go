@@ -211,3 +211,74 @@ func (r *upstreamCostRepo) RequeueExhaustedCosts(
 	}
 	return affected, nil
 }
+
+// opsSupplierBackfillQuery 取等待回填上游商户的 ops 错误日志。
+//
+// 只取「有上游请求 ID、还没回填商户、且足够新」的行：
+//   - 没有上游请求 ID 的行（网络层失败、本地失败）**永远查不到商户**，
+//     让它们留在结果里只会每轮白跑一次上游；
+//   - 上游的「失败类日志」保留量极小（实测约 405 条），超出窗口后即便当时有
+//     也补不回来，所以只回看最近一小段时间，不做无限重试。
+//
+// 部分索引 idx_ops_error_logs_supplier_backfill 与这里的谓词保持一致。
+const opsSupplierBackfillQuery = `
+SELECT id, upstream_request_id
+FROM ops_error_logs
+WHERE upstream_request_id IS NOT NULL
+  AND upstream_request_id <> ''
+  AND upstream_supplier_id IS NULL
+  AND upstream_supplier_name IS NULL
+  AND created_at >= $1
+ORDER BY created_at ASC
+LIMIT $2`
+
+// ListOpsSupplierBackfill 实现 service.UpstreamCostRepository。
+func (r *upstreamCostRepo) ListOpsSupplierBackfill(ctx context.Context, since time.Time, limit int) ([]service.OpsSupplierBackfill, error) {
+	if r == nil || r.db == nil || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, opsSupplierBackfillQuery, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list ops supplier backfill: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]service.OpsSupplierBackfill, 0, limit)
+	for rows.Next() {
+		var item service.OpsSupplierBackfill
+		if err := rows.Scan(&item.ID, &item.UpstreamRequestID); err != nil {
+			return nil, fmt.Errorf("scan ops supplier backfill: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ops supplier backfill: %w", err)
+	}
+	return out, nil
+}
+
+// opsSupplierResolveQuery 回填商户。
+//
+// 条件里带上 `upstream_supplier_id IS NULL AND upstream_supplier_name IS NULL`：
+// 回填是幂等的，重复执行不会覆盖已有结果（同一行被两轮同时捞到时只写一次）。
+const opsSupplierResolveQuery = `
+UPDATE ops_error_logs
+   SET upstream_supplier_id = $2,
+       upstream_supplier_name = $3
+ WHERE id = $1
+   AND upstream_supplier_id IS NULL
+   AND upstream_supplier_name IS NULL`
+
+// ResolveOpsSupplier 实现 service.UpstreamCostRepository。
+func (r *upstreamCostRepo) ResolveOpsSupplier(ctx context.Context, opsLogID int64, supplierID *int, supplierName string) error {
+	if r == nil || r.db == nil || opsLogID <= 0 {
+		return nil
+	}
+	// 名字为空时写空串而不是 NULL：否则 `upstream_supplier_name IS NULL` 恒为真，
+	// 这条记录会被每一轮反复捞出来重查。
+	name := strings.TrimSpace(supplierName)
+	if _, err := r.db.ExecContext(ctx, opsSupplierResolveQuery, opsLogID, supplierID, name); err != nil {
+		return fmt.Errorf("resolve ops supplier: %w", err)
+	}
+	return nil
+}
