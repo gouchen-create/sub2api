@@ -938,8 +938,13 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	// status 200 (the SSE stream opened successfully before upstream returned response.failed),
 	// but they are always client-visible blocked requests that belong in admin + user error
 	// lists.  Without the exemption the entire streaming-path cyber sink would be invisible.
+	//
+	// probe_failed 同理必须豁免：渠道监控探针的失败里有一大类是「上游返回 2xx、
+	// 但正文为空或不合模板」，探针据此判定失败（这是真的失败，客户端拿不到可用响应），
+	// 可 status_code 却是 200。不豁免的话，这类探针失败在「错误请求」页永远不可见——
+	// 而那正是管理员最需要看到、并据此拉黑上游商户的那批记录。
 	if !opsFilterIncludesRecoveredProviderRows(filter, phaseFilter) {
-		clauses = append(clauses, "(COALESCE(e.status_code, 0) >= 400 OR e.error_type = 'cyber_policy')")
+		clauses = append(clauses, "(COALESCE(e.status_code, 0) >= 400 OR e.error_type = 'cyber_policy' OR e.error_type = 'probe_failed')")
 	}
 
 	if filter.StartTime != nil && !filter.StartTime.IsZero() {

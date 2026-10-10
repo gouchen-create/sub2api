@@ -11,6 +11,14 @@ import (
 // channelMonitorErrorLogComponent 日志组件名。
 const channelMonitorErrorLogComponent = "service.channel_monitor_error_log"
 
+// channelMonitorProbeFailedErrorType 是「探针判定失败、但上游 HTTP 状态码 < 400」这类
+// 记录的错误类型（上游 2xx 但正文为空/不合模板，或压根没拿到响应）。
+//
+// ⚠️ 这个名字是**协议的一部分**，不能随手改：`ops_repo.go` 里「错误请求」页的
+// status>=400 守卫专门按它放行（与 cyber_policy 同样的豁免理由）。改了它，
+// 整批探针失败会在页面上静默消失，而且不会有任何编译或测试报错。
+const channelMonitorProbeFailedErrorType = "probe_failed"
+
 // ChannelMonitorErrorRecorder 把渠道监控探针的**失败**补记进 ops_error_logs。
 //
 // 为什么需要它：探针失败原本只落在监控自己的历史表里，**不会出现在「错误请求」页**，
@@ -101,10 +109,21 @@ func buildChannelMonitorErrorEntry(m *ChannelMonitor, res *CheckResult, index in
 		InboundEndpoint: inbound,
 		Stream:          res.Stream,
 		ErrorPhase:      "upstream",
-		ErrorType:       "upstream_error",
+		ErrorType:       channelMonitorProbeFailedErrorType,
 		Severity:        "P2",
 		ErrorMessage:    strings.TrimSpace(res.Message),
 		CreatedAt:       createdAt,
+	}
+	// 上游确实返回了 HTTP 错误码时，用网关同一套语义（upstream_error + 真实状态码），
+	// 这类记录天然能通过「错误请求」页的 status>=400 守卫。
+	//
+	// 而「上游返回 2xx 但正文为空/不合模板」这类失败，上游状态码是 200、
+	// 探针却判定失败 —— 那同样是真的失败（客户端拿不到可用响应），
+	// 只是状态码骗人。这类必须保留 probe_failed 这个类型：
+	// 错误请求页的守卫会按它豁免 status>=400 检查（见 ops_repo.go 里的说明），
+	// 否则整批探针失败在页面上永远不可见。
+	if res.StatusCode >= 400 {
+		entry.ErrorType = "upstream_error"
 	}
 	if upstreamEndpoint != "" {
 		entry.UpstreamEndpoint = upstreamEndpoint
