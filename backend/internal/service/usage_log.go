@@ -208,6 +208,25 @@ type UsageLog struct {
 	// 仅用于显示货币符号，不参与任何计算；未取到成本时为空串。
 	UpstreamCostCurrency string
 
+	// UpstreamFirstTokenMs / UpstreamDurationMs 是**上游自报**的首字耗时与总耗时（毫秒）。
+	//
+	// 与同一行的 FirstTokenMs / DurationMs 是两个口径，不能混用：
+	//   FirstTokenMs / DurationMs            = 本站观测，从网关接手请求算起，
+	//                                          含中转开销 + 网络往返 + 上游全部处理时间；
+	//   UpstreamFirstTokenMs / DurationMs    = 上游账单口径，只覆盖上游内部那一段。
+	// 两者相减就是「中转开销」，这是判断「是不是我们的中转把请求拖慢了」的唯一依据。
+	//
+	// 与 UpstreamCostOriginal 共享同一套回填生命周期（由后台取数任务用
+	// UpstreamRequestID 反查上游账单后写入），因此：
+	//   - nil  = 尚未对账到（账单未落库 / 重试耗尽 / 该账号不支持），**不代表耗时 0**；
+	//   - 有值 = 上游账单原文，此后不再变动。
+	//
+	// ⚠️ 精度：UpstreamFirstTokenMs 为毫秒精度；UpstreamDurationMs 由上游**整秒**值
+	// 换算而来，有效精度只有秒级，不可用于毫秒级比较。
+	UpstreamFirstTokenMs *int
+	// UpstreamDurationMs 见 UpstreamFirstTokenMs。
+	UpstreamDurationMs *int
+
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
 

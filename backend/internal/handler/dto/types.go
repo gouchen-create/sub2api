@@ -700,6 +700,17 @@ type AdminUsageLog struct {
 	UpstreamCost *float64 `json:"upstream_cost,omitempty"`
 	// UpstreamCostCurrency 是 UpstreamCost 的币种（A6 为 USD），仅用于显示货币符号。
 	UpstreamCostCurrency string `json:"upstream_cost_currency,omitempty"`
+	// UpstreamFirstTokenMs 是上游自报的首字耗时（毫秒），仅管理端可见。
+	//
+	// 与同一行的 first_token_ms 是两个口径：后者是本站观测（含中转开销），
+	// 这个只覆盖上游内部那一段，两者之差才是中转开销。
+	//
+	// 同样用指针：nil = 尚未对账到（前端显示「—」），与「上游真的 0ms」不同。
+	UpstreamFirstTokenMs *int `json:"upstream_first_token_ms,omitempty"`
+	// UpstreamDurationMs 是上游自报的总耗时（毫秒），仅管理端可见。
+	//
+	// ⚠️ 上游只回整数秒，本值由秒 ×1000 而来，有效精度为秒级；nil = 尚未对账到。
+	UpstreamDurationMs *int `json:"upstream_duration_ms,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 

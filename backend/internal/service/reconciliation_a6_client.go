@@ -279,6 +279,16 @@ type ReconciliationA6Bill struct {
 	QuotaPerUnit decimal.Decimal
 	// CostUSD 原始金额（美元）= Quota ÷ QuotaPerUnit，对应 cost_original。
 	CostUSD decimal.Decimal
+	// FirstTokenMs 上游自报的首字耗时（毫秒），取自账单 other.frt。
+	//
+	// 用指针而不是 int：页面上一列显示「0」还是「—」含义完全不同，
+	// 前者是「上游确实 0 毫秒出首字」，后者是「没取到」，不能混为一谈。
+	FirstTokenMs *int
+	// UpstreamDurationMs 上游自报的总耗时（毫秒），由账单 use_time（整秒）×1000 得到。
+	//
+	// ⚠️ 精度只到秒：上游只回整数秒，所以本字段的有效精度是 1000ms，
+	// 不能拿它和本站 duration_ms 做毫秒级比较。
+	UpstreamDurationMs *int
 	// Other 原始 other 字段：对象与被双重编码的 JSON 字符串都已解开；无法解析时为 nil。
 	Other map[string]any
 	// Raw 上游原始记录，供 raw jsonb 留存与重放。
@@ -735,6 +745,8 @@ func (c *A6Client) normalizeBill(raw map[string]any, quotaPerUnit decimal.Decima
 		Quota:               quota,
 		QuotaPerUnit:        quotaPerUnit,
 		CostUSD:             quota.Div(quotaPerUnit),
+		FirstTokenMs:        a6OptionalInt(other, "frt", "first_response_time"),
+		UpstreamDurationMs:  a6DurationSecondsToMs(raw, "use_time", "useTime"),
 		Other:               other,
 		Raw:                 raw,
 	}, ""
@@ -1201,6 +1213,40 @@ func a6ClampInt(value int64) int {
 		return math.MaxInt
 	}
 	return int(value)
+}
+
+// a6OptionalInt 按候选名读取一个可选的非负整数；缺失、类型不符或为负时返回 nil。
+//
+// 与 a6TokenCount 的取舍刻意不同：token 数缺失时按 0 参与求和是安全的，
+// 而耗时缺失若也按 0，页面上就会显示出「0ms 出首字」这种看起来正常、
+// 实际是未知的假数据。因此这里返回指针，把「没取到」与「上游确实报 0」区分开。
+func a6OptionalInt(source map[string]any, names ...string) *int {
+	if source == nil {
+		return nil
+	}
+	raw, ok := a6Lookup(source, names...)
+	if !ok {
+		return nil
+	}
+	value, ok := a6Int64(raw)
+	if !ok || value < 0 {
+		return nil
+	}
+	clamped := a6ClampInt(value)
+	return &clamped
+}
+
+// a6DurationSecondsToMs 读取上游以「整秒」计的耗时并换算成毫秒。
+//
+// A6 的 use_time 只有整数秒。换算成毫秒只是为了与本站 duration_ms 同单位展示，
+// 并不会凭空产生亚秒精度 —— 调用方展示时必须按秒级精度处理。
+func a6DurationSecondsToMs(source map[string]any, names ...string) *int {
+	seconds := a6OptionalInt(source, names...)
+	if seconds == nil {
+		return nil
+	}
+	ms := *seconds * 1000
+	return &ms
 }
 
 // a6DecodeLooseObject 把对象 / 被双重编码的 JSON 字符串 / 字节串解成 map。

@@ -283,6 +283,35 @@
           </div>
         </template>
 
+        <!-- 上游延迟：与左侧「延迟」并排对照。左列是本站观测（含中转开销 + 网络往返
+             + 上游全部处理时间），右列是上游账单自报，只覆盖上游内部那一段；两者相减
+             就是「中转开销」，这是判断「是不是我们的中转把请求拖慢了」的唯一依据。
+
+             刻意不做健康度着色：右侧是上游口径，用左侧那套阈值上色会暗示两列可直接
+             横向比大小，而它们的含义本就不同。
+
+             空值一律显示「—」而不是 0：上游账单要等落库后才会被反查回来（实测
+             P50≈13s、P99≈599s），刚发出的请求这列本来就是空的；若显示 0 会被读成
+             「上游瞬间返回」，与「还不知道」的排障结论完全相反。 -->
+        <template #cell-upstream_latency="{ row }">
+          <div
+            v-if="row.upstream_first_token_ms != null || row.upstream_duration_ms != null"
+            class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-xs"
+          >
+            <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyFirstToken') }}</span>
+            <span v-if="row.upstream_first_token_ms != null" class="font-medium tabular-nums text-gray-700 dark:text-gray-200">
+              {{ formatDuration(row.upstream_first_token_ms) }}
+            </span>
+            <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+            <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
+            <span v-if="row.upstream_duration_ms != null" class="font-medium tabular-nums text-gray-700 dark:text-gray-200">
+              {{ formatDuration(row.upstream_duration_ms) }}
+            </span>
+            <span v-else class="text-gray-400 dark:text-gray-500">-</span>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
         <template #cell-created_at="{ value }">
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>

@@ -663,6 +663,9 @@ const allColumns = computed(() => [
   { key: 'profit', label: t('admin.usage.profit'), sortable: false },
   { key: 'profit_margin', label: t('admin.usage.profitMargin'), sortable: false },
   { key: 'latency', label: t('usage.latency'), sortable: false },
+  // 「上游延迟」必须紧挨着「延迟」：左列是本站观测（含中转开销），右列是上游自报，
+  // 两者相减才是「中转开销」。拆开放到表格两头就失去了对照的意义。
+  { key: 'upstream_latency', label: t('admin.usage.upstreamLatency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },

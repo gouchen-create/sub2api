@@ -69,6 +69,15 @@ type UpstreamCostValue struct {
 	Original decimal.Decimal
 	// Currency 原币币种，A6 为 USD。仅用于显示货币符号，不参与计算。
 	Currency string
+	// FirstTokenMs 上游自报的首字耗时（毫秒）；上游未回传时为 nil。
+	//
+	// 与金额同批落库：这两项都出自同一条上游账单，分开取数只会让「成本有了、
+	// 延迟还没有」这种半截状态出现在页面上。
+	FirstTokenMs *int
+	// UpstreamDurationMs 上游自报的总耗时（毫秒）；上游未回传时为 nil。
+	//
+	// ⚠️ 上游只回整数秒，本值由秒 ×1000 而来，有效精度仍为秒级。
+	UpstreamDurationMs *int
 }
 
 // UpstreamCostPending 是一条「该去查成本」的使用记录。
@@ -291,8 +300,10 @@ func (s *UpstreamCostService) resolveOne(ctx context.Context, item *UpstreamCost
 	}
 
 	value := UpstreamCostValue{
-		Original: bill.CostUSD,
-		Currency: "USD",
+		Original:           bill.CostUSD,
+		Currency:           "USD",
+		FirstTokenMs:       bill.FirstTokenMs,
+		UpstreamDurationMs: bill.UpstreamDurationMs,
 	}
 	if err := s.repo.ResolveUpstreamCost(ctx, item.UsageLogID, value, time.Now().UTC()); err != nil {
 		result.Failed++

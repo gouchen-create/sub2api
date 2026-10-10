@@ -775,6 +775,8 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		UpstreamRequestID:       l.UpstreamRequestID,
 		UpstreamCost:            l.UpstreamCostOriginal,
 		UpstreamCostCurrency:    l.UpstreamCostCurrency,
+		UpstreamFirstTokenMs:    l.UpstreamFirstTokenMs,
+		UpstreamDurationMs:      l.UpstreamDurationMs,
 		BillingTier:             l.BillingTier,
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,

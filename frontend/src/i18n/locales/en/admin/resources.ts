@@ -523,6 +523,11 @@ export default {
       requestId: 'Request ID',
       upstreamRequestId: 'Upstream ID',
       upstreamCost: 'Cost',
+      // Sits next to the "Latency" column: left is our own observation (including
+      // relay overhead), right is what the upstream bills. The header says
+      // "Upstream" because the two columns use different scopes and are not
+      // directly comparable in size.
+      upstreamLatency: 'Upstream Latency',
       profit: 'Profit',
       profitMargin: 'Margin',
       totalUpstreamCost: 'Total Cost',

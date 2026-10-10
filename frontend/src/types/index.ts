@@ -1887,6 +1887,24 @@ export interface AdminUsageLog extends UsageLog {
   upstream_cost?: number | null
   /** 上游成本的币种（A6 为 USD），仅用于挑货币符号，不参与计算。 */
   upstream_cost_currency?: string
+  /**
+   * 上游账单自报的首字耗时（毫秒），仅管理员可见。
+   *
+   * 与同一行的 first_token_ms 是两个口径：后者是本站观测（含中转开销），
+   * 这个只覆盖上游内部那一段，两者之差才是「中转开销」。
+   *
+   * 与 upstream_cost 共享同一套回填生命周期：为 null / undefined 表示
+   * **尚未对账到**（上游账单还没落库、反查重试已用尽），页面必须显示「—」
+   * 而不是 0 —— 显示 0 会被读成「上游瞬间返回」，与「还不知道」正好相反。
+   */
+  upstream_first_token_ms?: number | null
+  /**
+   * 上游账单自报的总耗时（毫秒），仅管理员可见。
+   *
+   * ⚠️ 上游只回整数秒，本值由秒 ×1000 而来，**有效精度只有秒级**，
+   * 不能拿去和本站 duration_ms 做毫秒级比较。null 含义同上。
+   */
+  upstream_duration_ms?: number | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null

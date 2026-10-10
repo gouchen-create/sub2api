@@ -576,3 +576,86 @@ func TestReconciliationA6ClientNormalizeBillHandlesFloatNumbers(t *testing.T) {
 	_, ok = client.NormalizeBill(nil, decimal.NewFromInt(1))
 	require.False(t, ok, "空记录不可用")
 }
+
+// 上游首字/耗时的提取规则。
+//
+// 这一对的**核心语义是「缺失 ≠ 0」**：页面上一列显示「0ms」与显示「—」的排障结论
+// 完全相反，所以本用例把「上游回了 0」与「上游没回」两条分支分别钉死。
+func TestReconciliationA6ClientNormalizeBillExtractsUpstreamLatency(t *testing.T) {
+	client := NewA6Client(ReconciliationA6Config{
+		BaseURL: "https://a6.example.com", AccessToken: a6TestAccessToken, UserID: a6TestUserID,
+	})
+	base := map[string]any{
+		"request_id": "req-latency",
+		"created_at": 1730000100,
+		"quota":      500000,
+	}
+
+	t.Run("frt 在 other 里、use_time 在顶层，且 use_time 由秒换算为毫秒", func(t *testing.T) {
+		raw := map[string]any{}
+		for k, v := range base {
+			raw[k] = v
+		}
+		raw["other"] = "{\"frt\":1234}"
+		raw["use_time"] = 5
+
+		bill, ok := client.NormalizeBill(raw, decimal.NewFromInt(500000))
+		require.True(t, ok)
+		require.NotNil(t, bill.FirstTokenMs)
+		require.Equal(t, 1234, *bill.FirstTokenMs)
+		require.NotNil(t, bill.UpstreamDurationMs)
+		require.Equal(t, 5000, *bill.UpstreamDurationMs, "use_time 是整秒，必须 ×1000 换成毫秒")
+	})
+
+	t.Run("上游回 0 与上游没回必须区分开", func(t *testing.T) {
+		// 上游确实回了 0：指针非空、值为 0 —— 页面应显示「0ms」。
+		zero := map[string]any{}
+		for k, v := range base {
+			zero[k] = v
+		}
+		zero["other"] = map[string]any{"frt": 0}
+		zero["use_time"] = 0
+
+		bill, ok := client.NormalizeBill(zero, decimal.NewFromInt(500000))
+		require.True(t, ok)
+		require.NotNil(t, bill.FirstTokenMs, "上游回 0 时指针必须非空，否则页面会误显示为「未取到」")
+		require.Equal(t, 0, *bill.FirstTokenMs)
+		require.NotNil(t, bill.UpstreamDurationMs)
+		require.Equal(t, 0, *bill.UpstreamDurationMs)
+
+		// 上游完全没回：指针必须为 nil —— 页面应显示「—」。
+		absent, ok := client.NormalizeBill(base, decimal.NewFromInt(500000))
+		require.True(t, ok)
+		require.Nil(t, absent.FirstTokenMs, "字段缺失必须是 nil，不能折成 0")
+		require.Nil(t, absent.UpstreamDurationMs, "字段缺失必须是 nil，不能折成 0")
+	})
+
+	t.Run("非法的 frt / use_time 一律降级为 nil，且不影响账单本身可用", func(t *testing.T) {
+		raw := map[string]any{}
+		for k, v := range base {
+			raw[k] = v
+		}
+		raw["other"] = map[string]any{"frt": "not-a-number"}
+		raw["use_time"] = -3
+
+		bill, ok := client.NormalizeBill(raw, decimal.NewFromInt(500000))
+		require.True(t, ok, "耗时取不到不该让整条账单作废——成本仍然是有效数据")
+		require.Nil(t, bill.FirstTokenMs)
+		require.Nil(t, bill.UpstreamDurationMs)
+		require.True(t, bill.CostUSD.Equal(decimal.NewFromInt(1)), "金额不受影响")
+	})
+
+	t.Run("other 为被双重编码的 JSON 字符串时也能取到 frt", func(t *testing.T) {
+		raw := map[string]any{}
+		for k, v := range base {
+			raw[k] = v
+		}
+		raw["other"] = "{\"frt\":2500,\"cache_tokens\":42}"
+
+		bill, ok := client.NormalizeBill(raw, decimal.NewFromInt(500000))
+		require.True(t, ok)
+		require.NotNil(t, bill.FirstTokenMs)
+		require.Equal(t, 2500, *bill.FirstTokenMs)
+		require.Equal(t, 42, bill.CacheTokensTotal, "同一条 other 里的既有字段不受影响")
+	})
+}
