@@ -2,6 +2,7 @@ package admin
 
 import (
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -197,6 +198,62 @@ func (h *UpstreamCostSettingsHandler) BlockUpstream(c *gin.Context) {
 		"[UpstreamBlock] 拉黑成功: scope=%s supplier_id=%d channel_id=%d model=%s",
 		scope, input.SupplierID, input.ChannelID, strings.TrimSpace(input.Model))
 	response.Success(c, gin.H{"scope": scope})
+}
+
+// upstreamBlocksDTO 是「上游当前黑名单」的返回体。
+//
+// 用**扁平的两个列表**而不是把黑名单整条透传：前端要回答的只是"这一行的商户/渠道
+// 是否已在黑名单里"，集合结构最省事（可直接建 Set 做 O(1) 判断）。
+//
+// ⚠️ 渠道级黑名单上游可达上千条（实测 942 条），这是**每个页面加载都要拉一次**的
+// 只读数据，因此刻意只回 ID 键、不带名称等展示字段。
+type upstreamBlocksDTO struct {
+	SupplierIDs      []int    `json:"supplier_ids"`
+	ChannelModelKeys []string `json:"channel_model_keys"`
+}
+
+// UpstreamBlocks 读取上游当前黑名单，供页面把已拉黑的按钮置灰。
+//
+// GET /admin/usage/upstream-blocks
+//
+// 为什么每次都现问上游、不在本库另存一份：黑名单的权威在上游。本地存一份，
+// 管理员直接在上游后台拉黑或恢复时本地不会知道，页面就会长期显示错的状态——
+// 而"以为已经拉黑了"比"显示未拉黑"更危险。
+//
+// 读不到时**返回空集合而不是报错**：这只是给按钮上色的辅助信息，拉不到最多是
+// 按钮不置灰（仍可点击，点击时上游会拒绝），不该因此让整张使用记录表加载失败。
+func (h *UpstreamCostSettingsHandler) UpstreamBlocks(c *gin.Context) {
+	out := upstreamBlocksDTO{SupplierIDs: []int{}, ChannelModelKeys: []string{}}
+	if h == nil || h.settingsSvc == nil {
+		response.Success(c, out)
+		return
+	}
+
+	cfg := h.settingsSvc.Effective(c.Request.Context()).ClientConfig()
+	client := service.NewA6Client(cfg)
+	if !client.Configured() {
+		response.Success(c, out)
+		return
+	}
+
+	blocks, err := client.ListBlocks(c.Request.Context())
+	if err != nil {
+		// 记录原因但照常返回空集合：置灰是锦上添花，不能拖垮主列表。
+		logger.LegacyPrintf("handler.admin.upstream_block",
+			"[UpstreamBlocks] 读取上游黑名单失败（本次不做置灰）: err=%v", err)
+		response.Success(c, out)
+		return
+	}
+
+	for id := range blocks.SupplierIDs {
+		out.SupplierIDs = append(out.SupplierIDs, id)
+	}
+	for key := range blocks.ChannelModelKeys {
+		out.ChannelModelKeys = append(out.ChannelModelKeys, key)
+	}
+	sort.Ints(out.SupplierIDs)
+	sort.Strings(out.ChannelModelKeys)
+	response.Success(c, out)
 }
 
 // writeUpstreamCostSettingsError 把设置服务的哨兵错误翻译成 HTTP 状态码。

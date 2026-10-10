@@ -550,6 +550,7 @@ export default {
       blockConfirmSupplier: '确定要拉黑商户 {name}（ID {id}）吗？该商户名下所有渠道都会退出路由，且它名下的固定绑定不会自动改绑，需要你另行处理。',
       blockConfirmChannelModel: '确定要拉黑渠道 {channel} 的模型 {model} 吗？该渠道的其它模型不受影响。',
       blockOk: '拉黑成功',
+      alreadyBlocked: '已拉黑',
       blockNoSupplier: '这一行还没有上游商户信息（尚未对账到），无法拉黑',
       profit: '盈亏',
       profitMargin: '利润率',

@@ -554,6 +554,7 @@ export default {
       blockConfirmSupplier: 'Block the entire supplier {name} (ID {id})? All of its channels will leave routing, and its pinned bindings will NOT be rebind automatically.',
       blockConfirmChannelModel: 'Block model {model} on channel {channel}? Other models on that channel are unaffected.',
       blockOk: 'Blocked',
+      alreadyBlocked: 'Blocked',
       blockNoSupplier: 'This row has no upstream supplier yet (not reconciled), so it cannot be blocked',
       profit: 'Profit',
       profitMargin: 'Margin',

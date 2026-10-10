@@ -31,6 +31,27 @@ export async function blockUpstream(payload: UpstreamBlockPayload): Promise<{ sc
   return data.data
 }
 
+/**
+ * 读取上游当前黑名单，用来把已拉黑的按钮置灰。
+ *
+ * 每次页面加载现问上游、本地不缓存：黑名单的权威在上游，本地存一份会在
+ * 管理员直接去上游后台拉黑/恢复时与上游漂移 —— 而"以为已经拉黑了"比
+ * "显示未拉黑"更危险。
+ *
+ * 后端在读取失败时返回空集合而非报错（置灰只是锦上添花，不该拖垮主列表），
+ * 所以这里不需要额外兜底。
+ */
+export interface UpstreamBlocks {
+  supplier_ids: number[]
+  /** "channelID|model" 形式的复合键；上游的渠道级拉黑是按模型生效的。 */
+  channel_model_keys: string[]
+}
+
+export async function fetchUpstreamBlocks(): Promise<UpstreamBlocks> {
+  const { data } = await apiClient.get<{ data: UpstreamBlocks }>('/admin/usage/upstream-blocks')
+  return data.data ?? { supplier_ids: [], channel_model_keys: [] }
+}
+
 // ==================== Types ====================
 
 export interface AdminUsageStatsResponse {

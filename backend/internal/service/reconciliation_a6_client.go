@@ -890,6 +890,84 @@ func (c *A6Client) DisableChannelModel(ctx context.Context, channelID int, model
 	return c.postJSON(ctx, cfg, fmt.Sprintf("/api/marketplace/channels/%d/disable", channelID), params)
 }
 
+// A6BlockList 是上游当前黑名单的一份快照。
+//
+// 刻意**不在本库另存一份**：黑名单的权威在上游，本地存一份必然与上游漂移
+// ——管理员直接在上游后台拉黑/恢复时，本地那份不会知道，于是页面显示的
+// 「已拉黑」与实际路由状态长期不一致。页面要回答的是"这一刻这条渠道还能用吗"，
+// 那就直接问上游，代价只是一次 GET。
+type A6BlockList struct {
+	// SupplierIDs 被拉黑的整个商户 ID 集合。
+	SupplierIDs map[int]struct{}
+	// ChannelModelKeys 被拉黑的「渠道+模型」集合，键为 "channelID|model"。
+	//
+	// 用复合键而不是单独的 channel_id：上游的渠道级拉黑是**按模型**生效的
+	// （同一渠道的其它模型仍然可用），只按 channel_id 判断会误伤。
+	ChannelModelKeys map[string]struct{}
+}
+
+// A6ChannelModelKey 组装渠道级黑名单的复合键。集中一处，避免两边拼法不一致。
+func A6ChannelModelKey(channelID int, model string) string {
+	return strconv.Itoa(channelID) + "|" + strings.TrimSpace(model)
+}
+
+// ListBlocks 读取上游当前的黑名单（整个商户 + 渠道模型两级）。
+//
+// 对应 A6：GET /api/marketplace/my-blocks
+// 响应形如 data.suppliers[] / data.channels[]，渠道条目含 supplier_id、channel_id、model。
+//
+// 只读，因此走带重试的 getJSONWithRetry（与拉账单同一套退避）。
+func (c *A6Client) ListBlocks(ctx context.Context) (A6BlockList, error) {
+	out := A6BlockList{
+		SupplierIDs:      map[int]struct{}{},
+		ChannelModelKeys: map[string]struct{}{},
+	}
+	cfg := c.Config()
+	if err := c.validate(cfg); err != nil {
+		return out, err
+	}
+	envelope, err := c.getJSONWithRetry(ctx, cfg, "/api/marketplace/my-blocks", nil)
+	if err != nil {
+		return out, err
+	}
+	if err := a6CheckSuccess(envelope); err != nil {
+		return out, err
+	}
+	data, _ := envelope["data"].(map[string]any)
+
+	for _, raw := range a6AnySlice(data["suppliers"]) {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id := a6OptionalInt(item, "supplier_id"); id != nil && *id > 0 {
+			out.SupplierIDs[*id] = struct{}{}
+		}
+	}
+	for _, raw := range a6AnySlice(data["channels"]) {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		chID := a6OptionalInt(item, "channel_id")
+		model := a6OptionalString(item, "model")
+		if chID != nil && *chID > 0 && model != "" {
+			out.ChannelModelKeys[A6ChannelModelKey(*chID, model)] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+// a6AnySlice 把可能是 nil / 非数组的值安全地取成切片。
+//
+// A6 的某些部署在"没有黑名单"时会把字段省略或给 null；直接断言 []any 会 panic。
+func a6AnySlice(v any) []any {
+	if s, ok := v.([]any); ok {
+		return s
+	}
+	return nil
+}
+
 // postJSON 发一次 POST（无请求体，参数走 query），仅 2xx 视为成功。
 //
 // 刻意**不重试**：拉黑是有副作用的写操作，若第一次其实已经成功、只是响应丢失，

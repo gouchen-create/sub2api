@@ -720,6 +720,8 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 它本来就是"与上游 A6 打交道"的那一处。
 		// ⚠️ 写操作：拉黑整个商户会让该商户名下所有渠道退出路由。
 		usage.POST("/upstream-block", h.Admin.UpstreamCostSettings.BlockUpstream)
+		// 读上游当前黑名单，供页面把已拉黑的按钮置灰。只读、无副作用。
+		usage.GET("/upstream-blocks", h.Admin.UpstreamCostSettings.UpstreamBlocks)
 		// 盈亏排除名单：内部人员的收入不计入盈亏，但其上游成本照算。
 		// 面板上它和上面那份凭据挨着放，但接口分开——凭据保存失败不该让
 		// 名单也跟着不生效。

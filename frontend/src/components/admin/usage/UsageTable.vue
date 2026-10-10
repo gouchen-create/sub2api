@@ -393,20 +393,20 @@
               type="button"
               data-testid="block-supplier"
               class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
-              :disabled="row.upstream_supplier_id == null || blocking"
+              :disabled="row.upstream_supplier_id == null || blocking || isSupplierBlocked(row)"
               :title="row.upstream_supplier_id == null ? t('admin.usage.blockNoSupplier') : t('admin.usage.blockSupplierHint')"
               @click="blockRow(row, 'supplier')"
             >
-              {{ t('admin.usage.blockSupplier') }}
+              {{ isSupplierBlocked(row) ? t('admin.usage.alreadyBlocked') : t('admin.usage.blockSupplier') }}
             </button>
             <button
               type="button"
               data-testid="block-channel"
               class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
-              :disabled="row.upstream_channel_id == null || blocking"
+              :disabled="row.upstream_channel_id == null || blocking || isChannelBlocked(row)"
               @click="blockRow(row, 'channel_model')"
             >
-              {{ t('admin.usage.blockChannel') }}
+              {{ isChannelBlocked(row) ? t('admin.usage.alreadyBlocked') : t('admin.usage.blockChannel') }}
             </button>
           </div>
         </template>
@@ -692,7 +692,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, formatReasoningEffort, reasoningEffortValuesEqual } from '@/utils/format'
@@ -786,7 +786,7 @@ function formatSignedPercent(value: number): string {
 
 
 import DataTable from '@/components/common/DataTable.vue'
-import { blockUpstream } from '@/api/admin/usage'
+import { blockUpstream, fetchUpstreamBlocks } from '@/api/admin/usage'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -967,6 +967,40 @@ const formatOverheadMs = (ms: number): string => `${ms > 0 ? '+' : ''}${ms}ms`
 // 避免管理员连点几下把同一商户重复拉黑（上游接口不做去重）。
 const blocking = ref(false)
 
+// 上游当前黑名单快照，用来把已拉黑的按钮置灰。
+//
+// 每次挂载现问上游、不在本地存：黑名单的权威在上游，本地存一份会在管理员
+// 直接去上游后台拉黑/恢复时与上游漂移——而"以为已经拉黑了"比"显示未拉黑"更危险。
+// 读取失败不报错（后端已回空集合）：置灰只是辅助，不该影响列表可用性。
+const blockedSupplierIDs = ref<Set<number>>(new Set())
+const blockedChannelModelKeys = ref<Set<string>>(new Set())
+
+const loadUpstreamBlocks = async () => {
+  try {
+    const res = await fetchUpstreamBlocks()
+    blockedSupplierIDs.value = new Set(res.supplier_ids || [])
+    blockedChannelModelKeys.value = new Set(res.channel_model_keys || [])
+  } catch {
+    // 拉不到就都不置灰：按钮仍可点击，真拉黑了上游会拒绝并回显原因。
+  }
+}
+
+onMounted(loadUpstreamBlocks)
+
+// 该行的商户是否已被拉黑。
+const isSupplierBlocked = (row: AdminUsageLog): boolean =>
+  row.upstream_supplier_id != null && blockedSupplierIDs.value.has(row.upstream_supplier_id)
+
+// 该行的「渠道+模型」是否已被拉黑。
+//
+// 商户被拉黑时其名下所有渠道也等同被拉黑，所以先看商户级——
+// 否则会出现"商户已拉黑、但渠道按钮还亮着"的错觉。
+const isChannelBlocked = (row: AdminUsageLog): boolean => {
+  if (isSupplierBlocked(row)) return true
+  if (row.upstream_channel_id == null) return false
+  return blockedChannelModelKeys.value.has(`${row.upstream_channel_id}|${(row.model || '').trim()}`)
+}
+
 const blockRow = async (row: AdminUsageLog, scope: 'supplier' | 'channel_model') => {
   if (blocking.value) return
 
@@ -994,6 +1028,9 @@ const blockRow = async (row: AdminUsageLog, scope: 'supplier' | 'channel_model')
   try {
     await blockUpstream(payload)
     appStore.showSuccess(t('admin.usage.blockOk'))
+    // 拉黑成功后立刻回读上游黑名单：同一页里其它行可能属于同一个商户/渠道，
+    // 它们也该马上变成「已拉黑」，否则管理员会以为只影响了一行。
+    await loadUpstreamBlocks()
   } catch (err: any) {
     // 把后端带回的上游原话原样透出：令牌失效/无权限的原因只在那里，
     // 换成笼统的「操作失败」会让管理员只能靠猜。
