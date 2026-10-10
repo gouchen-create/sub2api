@@ -159,6 +159,18 @@ func (h *UsageHandler) List(c *gin.Context) {
 		upstreamModelMismatch = &value
 	}
 
+	// 对账状态筛选（true=已对账 / false=未对账）。
+	// 语义见 usagestats.UsageLogQuery.UpstreamReconciled。
+	var upstreamReconciled *bool
+	if raw := strings.TrimSpace(c.Query("upstream_reconciled")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			response.BadRequest(c, "Invalid upstream_reconciled value, use true or false")
+			return
+		}
+		upstreamReconciled = &value
+	}
+
 	// Parse date range
 	var startTime, endTime *time.Time
 	userTZ := c.Query("timezone") // Get user's timezone from request
@@ -202,6 +214,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		UpstreamReconciled:    upstreamReconciled,
 		StartTime:             startTime,
 		EndTime:               endTime,
 		ExactTotal:            exactTotal,
@@ -310,6 +323,18 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		upstreamModelMismatch = &value
 	}
 
+	// 对账状态筛选（true=已对账 / false=未对账）。
+	// 语义见 usagestats.UsageLogQuery.UpstreamReconciled。
+	var upstreamReconciled *bool
+	if raw := strings.TrimSpace(c.Query("upstream_reconciled")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			response.BadRequest(c, "Invalid upstream_reconciled value, use true or false")
+			return
+		}
+		upstreamReconciled = &value
+	}
+
 	// Parse date range
 	userTZ := c.Query("timezone")
 	now := timezone.NowInUserLocation(userTZ)
@@ -361,6 +386,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		BillingType:           billingType,
 		BillingMode:           billingMode,
 		UpstreamModelMismatch: upstreamModelMismatch,
+		UpstreamReconciled:    upstreamReconciled,
 		StartTime:             &startTime,
 		EndTime:               &endTime,
 	}

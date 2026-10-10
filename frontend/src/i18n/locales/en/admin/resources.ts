@@ -542,8 +542,15 @@ export default {
       // The two scopes differ (whole supplier vs one channel's one model), so the
       // labels must spell the scope out rather than just saying "Block".
       upstreamAction: 'Action',
+      // Reconciliation-status filter: lets the admin see which rows still lack
+      // an upstream cost lookup.
+      upstreamReconciled: 'Reconciliation',
+      allReconciled: 'All',
+      reconciledOnly: 'Reconciled',
+      unreconciledOnly: 'Unreconciled',
       blockSupplier: 'Block supplier',
-      blockChannelModel: 'Block channel+model',
+      blockChannel: 'Block channel',
+      blockSupplierHint: 'Block this supplier: all of its channels leave routing',
       blockConfirmSupplier: 'Block the entire supplier {name} (ID {id})? All of its channels will leave routing, and its pinned bindings will NOT be rebind automatically.',
       blockConfirmChannelModel: 'Block model {model} on channel {channel}? Other models on that channel are unaffected.',
       blockOk: 'Blocked',

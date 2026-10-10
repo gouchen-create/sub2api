@@ -1875,6 +1875,13 @@ export interface AdminUsageLog extends UsageLog {
   upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null
   upstream_model_mismatch?: boolean | null
+  /**
+   * 对账状态：true=已对账（已反查到上游成本）；false=未对账。
+   *
+   * 注意后端对 false 额外要求存在上游请求 ID —— 对账能力上线前的历史行天生
+   * 无账可对，把它们算进「未对账」会让这一项变成几十万条噪声。
+   */
+  upstream_reconciled?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
   /**

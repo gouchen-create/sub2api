@@ -131,6 +131,18 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	if filters.UpstreamModelMismatch != nil {
 		conditions = append(conditions, upstreamModelMismatchCondition("upstream_model_mismatch", *filters.UpstreamModelMismatch))
 	}
+	// 「对账状态」筛选。未对账一侧必须带上 upstream_request_id <> ''：
+	// 没有上游请求 ID 的历史行天生无法对账（对账能力上线前的数据），
+	// 混进来会让管理员看到几十万条"未对账"，真正要处理的几条反而被淹没。
+	if filters.UpstreamReconciled != nil {
+		if *filters.UpstreamReconciled {
+			conditions = append(conditions, "upstream_cost_fetched_at IS NOT NULL")
+		} else {
+			conditions = append(conditions,
+				"upstream_cost_fetched_at IS NULL",
+				"COALESCE(upstream_request_id, '') <> ''")
+		}
+	}
 	if filters.StartTime != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", len(args)+1))
 		args = append(args, *filters.StartTime)

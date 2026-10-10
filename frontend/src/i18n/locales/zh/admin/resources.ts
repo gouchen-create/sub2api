@@ -539,9 +539,15 @@ export default {
       // 两个动作的作用域完全不同（一个是整商户、一个是单渠道单模型），
       // 因此按钮文案必须把范围写清楚，不能只写「拉黑」。
       upstreamAction: '操作',
-      blockSupplier: '拉黑整个商户',
-      blockChannelModel: '拉黑该渠道该模型',
-      blockConfirmSupplier: '确定要拉黑整个商户 {name}（ID {id}）吗？该商户名下所有渠道都会退出路由，且它名下的固定绑定不会自动改绑，需要你另行处理。',
+      // 对账状态筛选：主人用来自己核对「还有哪些没反查到上游成本」。
+      upstreamReconciled: '对账状态',
+      allReconciled: '全部',
+      reconciledOnly: '已对账',
+      unreconciledOnly: '未对账',
+      blockSupplier: '拉黑商户',
+      blockChannel: '拉黑渠道',
+      blockSupplierHint: '拉黑该商户：其名下所有渠道都会退出路由',
+      blockConfirmSupplier: '确定要拉黑商户 {name}（ID {id}）吗？该商户名下所有渠道都会退出路由，且它名下的固定绑定不会自动改绑，需要你另行处理。',
       blockConfirmChannelModel: '确定要拉黑渠道 {channel} 的模型 {model} 吗？该渠道的其它模型不受影响。',
       blockOk: '拉黑成功',
       blockNoSupplier: '这一行还没有上游商户信息（尚未对账到），无法拉黑',

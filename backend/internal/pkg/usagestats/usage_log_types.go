@@ -294,8 +294,17 @@ type UsageLogFilters struct {
 	BillingType           *int8
 	BillingMode           string
 	UpstreamModelMismatch *bool
-	StartTime             *time.Time
-	EndTime               *time.Time
+	// UpstreamReconciled 按「上游成本是否已反查回来」筛选。
+	//
+	// true  = 已对账（upstream_cost_fetched_at 非空）
+	// false = 未对账（尚未反查到成本）
+	//
+	// ⚠️ false 额外要求 upstream_request_id 非空：没有上游请求 ID 的历史行
+	// （对账能力上线之前的数据，可达数十万条）**本来就无法对账**，
+	// 把它们算进「未对账」只会淹没真正待办的那几条。
+	UpstreamReconciled *bool
+	StartTime          *time.Time
+	EndTime            *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
 	// ProfitExcludedUserIDs 是「不计入盈亏」的用户名单（内部人员）。

@@ -377,30 +377,36 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
         </template>
 
-        <!-- 操作列：把这一行的上游商户/渠道模型直接在上游处置掉。
-             两个动作的**作用域完全不同**（整商户 vs 单渠道单模型），所以分成两个按钮、
-             且确认框里把范围与影响面写清楚 —— 拉黑整商户是不可轻易撤销的，
+        <!-- 操作列：把这一行的上游商户/渠道直接在上游处置掉。
+             两个动作的**作用域完全不同**（整商户 vs 单渠道），所以分成两个标签按钮、
+             且确认框里把范围与影响面写清楚 —— 拉黑商户不可轻易撤销，
              而且该商户名下的固定绑定不会自动改绑。
 
-             没有上游商户信息（尚未对账到）时禁用按钮：那种情况下这一行还不知道该拉黑谁。 -->
+             样式刻意复用左侧「分组」列的小标签（同 rounded/px-2/py-0.5/text-xs/font-medium），
+             让整行在视觉上维持一致；只用颜色区分动作的破坏性：
+             拉黑商户是红灯级动作（红），拉黑渠道范围小一档（琥珀）。
+
+             没有上游商户信息（尚未对账到）时禁用：那种情况下这一行还不知道该拉黑谁。 -->
         <template #cell-upstream_action="{ row }">
-          <div class="flex flex-col items-stretch gap-1">
+          <div class="flex flex-col items-start gap-1">
             <button
               type="button"
-              class="btn-secondary whitespace-nowrap !px-2 !py-1 text-xs"
+              data-testid="block-supplier"
+              class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800"
               :disabled="row.upstream_supplier_id == null || blocking"
-              :title="row.upstream_supplier_id == null ? t('admin.usage.blockNoSupplier') : ''"
+              :title="row.upstream_supplier_id == null ? t('admin.usage.blockNoSupplier') : t('admin.usage.blockSupplierHint')"
               @click="blockRow(row, 'supplier')"
             >
               {{ t('admin.usage.blockSupplier') }}
             </button>
             <button
               type="button"
-              class="btn-secondary whitespace-nowrap !px-2 !py-1 text-xs"
+              data-testid="block-channel"
+              class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
               :disabled="row.upstream_channel_id == null || blocking"
               @click="blockRow(row, 'channel_model')"
             >
-              {{ t('admin.usage.blockChannelModel') }}
+              {{ t('admin.usage.blockChannel') }}
             </button>
           </div>
         </template>
