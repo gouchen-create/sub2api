@@ -538,6 +538,16 @@ export default {
       supplierName: 'Supplier',
       upstreamChannel: 'A6 Channel',
       upstreamTargetChannel: 'Target Channel',
+      // Action column: dispose of a bad upstream supplier/channel right from here.
+      // The two scopes differ (whole supplier vs one channel's one model), so the
+      // labels must spell the scope out rather than just saying "Block".
+      upstreamAction: 'Action',
+      blockSupplier: 'Block supplier',
+      blockChannelModel: 'Block channel+model',
+      blockConfirmSupplier: 'Block the entire supplier {name} (ID {id})? All of its channels will leave routing, and its pinned bindings will NOT be rebind automatically.',
+      blockConfirmChannelModel: 'Block model {model} on channel {channel}? Other models on that channel are unaffected.',
+      blockOk: 'Blocked',
+      blockNoSupplier: 'This row has no upstream supplier yet (not reconciled), so it cannot be blocked',
       profit: 'Profit',
       profitMargin: 'Margin',
       totalUpstreamCost: 'Total Cost',

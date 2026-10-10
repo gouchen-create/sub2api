@@ -377,6 +377,34 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
         </template>
 
+        <!-- 操作列：把这一行的上游商户/渠道模型直接在上游处置掉。
+             两个动作的**作用域完全不同**（整商户 vs 单渠道单模型），所以分成两个按钮、
+             且确认框里把范围与影响面写清楚 —— 拉黑整商户是不可轻易撤销的，
+             而且该商户名下的固定绑定不会自动改绑。
+
+             没有上游商户信息（尚未对账到）时禁用按钮：那种情况下这一行还不知道该拉黑谁。 -->
+        <template #cell-upstream_action="{ row }">
+          <div class="flex flex-col items-stretch gap-1">
+            <button
+              type="button"
+              class="btn-secondary whitespace-nowrap !px-2 !py-1 text-xs"
+              :disabled="row.upstream_supplier_id == null || blocking"
+              :title="row.upstream_supplier_id == null ? t('admin.usage.blockNoSupplier') : ''"
+              @click="blockRow(row, 'supplier')"
+            >
+              {{ t('admin.usage.blockSupplier') }}
+            </button>
+            <button
+              type="button"
+              class="btn-secondary whitespace-nowrap !px-2 !py-1 text-xs"
+              :disabled="row.upstream_channel_id == null || blocking"
+              @click="blockRow(row, 'channel_model')"
+            >
+              {{ t('admin.usage.blockChannelModel') }}
+            </button>
+          </div>
+        </template>
+
         <template #cell-created_at="{ value }">
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>
@@ -752,6 +780,7 @@ function formatSignedPercent(value: number): string {
 
 
 import DataTable from '@/components/common/DataTable.vue'
+import { blockUpstream } from '@/api/admin/usage'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -922,6 +951,51 @@ const overheadDuration = (
 // 毫秒差值：正数显式带「+」，单位 `ms`（小写）跟在每个数值后面，如 `+724ms`。
 // 单位不放表头：上下两格位数常不同，单位跟着数字走才不会"离得太远"。
 const formatOverheadMs = (ms: number): string => `${ms > 0 ? '+' : ''}${ms}ms`
+
+// 上游拉黑：把这一行对应的「整个商户」或「该渠道该模型」在上游 A6 侧处置掉。
+//
+// 用 window.confirm 而不是自建弹窗：这是低频、高危、需要"看清范围再点"的动作，
+// 原生确认框足以表达，也省掉一个只为它存在的弹窗组件。
+//
+// 只用一个 blocking 标记而不是按行记：同一时刻只允许一个处置在飞，
+// 避免管理员连点几下把同一商户重复拉黑（上游接口不做去重）。
+const blocking = ref(false)
+
+const blockRow = async (row: AdminUsageLog, scope: 'supplier' | 'channel_model') => {
+  if (blocking.value) return
+
+  let payload: Parameters<typeof blockUpstream>[0]
+  if (scope === 'supplier') {
+    const id = row.upstream_supplier_id
+    // 尚未对账到的行没有商户 ID，不知道该拉黑谁 —— 按钮虽已禁用，这里再挡一次。
+    if (id == null) {
+      appStore.showError(t('admin.usage.blockNoSupplier'))
+      return
+    }
+    const name = (row.upstream_supplier_name || '').trim() || `#${id}`
+    if (!window.confirm(t('admin.usage.blockConfirmSupplier', { name, id }))) return
+    payload = { scope: 'supplier', supplier_id: id }
+  } else {
+    const channelID = row.upstream_channel_id
+    if (channelID == null) return
+    const model = (row.model || '').trim()
+    if (!model) return
+    if (!window.confirm(t('admin.usage.blockConfirmChannelModel', { channel: channelID, model }))) return
+    payload = { scope: 'channel_model', channel_id: channelID, model }
+  }
+
+  blocking.value = true
+  try {
+    await blockUpstream(payload)
+    appStore.showSuccess(t('admin.usage.blockOk'))
+  } catch (err: any) {
+    // 把后端带回的上游原话原样透出：令牌失效/无权限的原因只在那里，
+    // 换成笼统的「操作失败」会让管理员只能靠猜。
+    appStore.showError(err?.message || String(err))
+  } finally {
+    blocking.value = false
+  }
+}
 
 // 内部探针的入站标记是「伪路径」，是给后端过滤用的（usage_logs.inbound_endpoint），
 // 直接摊在表里没人看得懂。这里只做**显示层**翻译，不改数据本身 ——

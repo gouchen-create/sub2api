@@ -673,6 +673,9 @@ const allColumns = computed(() => [
   // 上游商家归属：4 个值同属「这条请求最终由哪家商户的哪个渠道服务」，
   // 合成一列堆叠展示（与左侧「端点」列同样的形态），拆成 4 列会把表格撑得过宽。
   { key: 'upstream_supplier', label: t('admin.usage.upstreamSupplier'), sortable: false },
+  // 操作列固定放在最后一列（时间之后）：它是"看懂了再动手"的收尾动作，
+  // 夹在数据列中间会打断阅读。
+  { key: 'upstream_action', label: t('admin.usage.upstreamAction'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },

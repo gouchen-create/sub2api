@@ -7,6 +7,30 @@ import { apiClient } from '../client'
 import type { AdminUsageLog, UsageQueryParams, PaginatedResponse, UsageRequestType } from '@/types'
 import type { EndpointStat } from '@/types'
 
+// ==================== 上游拉黑（A6 侧处置） ====================
+
+/**
+ * 在上游 A6 侧拉黑「整个商户」或「某渠道的某个模型」。
+ *
+ * ⚠️ 有副作用的写操作：拉黑整个商户会让该商户名下所有渠道退出路由，
+ * 且**该商户名下的固定绑定不会自动改绑**（会悬空）。调用方必须先让操作者二次确认。
+ *
+ * 参数由调用方从那一行已有数据里直接取（supplier_id / channel_id / model 都显示在页面上），
+ * 后端不再回查，避免为一次处置多开一条读库路径。
+ */
+export interface UpstreamBlockPayload {
+  /** "supplier" = 整个商户；"channel_model" = 某渠道的某个模型。 */
+  scope: 'supplier' | 'channel_model'
+  supplier_id?: number
+  channel_id?: number
+  model?: string
+}
+
+export async function blockUpstream(payload: UpstreamBlockPayload): Promise<{ scope: string }> {
+  const { data } = await apiClient.post<{ data: { scope: string } }>('/admin/usage/upstream-block', payload)
+  return data.data
+}
+
 // ==================== Types ====================
 
 export interface AdminUsageStatsResponse {

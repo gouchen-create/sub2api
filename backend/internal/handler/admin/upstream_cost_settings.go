@@ -2,7 +2,9 @@ package admin
 
 import (
 	"errors"
+	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -106,8 +108,98 @@ func (h *UpstreamCostSettingsHandler) UpdateSettings(c *gin.Context) {
 	response.Success(c, toUpstreamCostSettingsDTO(settings.View()))
 }
 
-// writeUpstreamCostSettingsError 把设置服务的哨兵错误翻译成 HTTP 状态码。
+// upstreamBlockInputDTO 是「拉黑上游商户 / 渠道模型」的入参。
 //
+// 刻意由前端把 supplier_id / channel_id / model 直接带上来，而不是后端按 usage log id 回查：
+//   - 这几个值本来就已经显示在那一行上，前端手上就有，回查纯属多跑一趟库；
+//   - 后端回查要给本 handler 额外注入 usage 仓储，而它的职责就是"与上游 A6 打交道"，
+//     多一条读库路径只会让依赖变宽、也让「谁能改上游」变得含糊。
+//
+// 代价是这些值会被拼进上游 URL 路径，所以下面逐项校验，不信任前端。
+type upstreamBlockInputDTO struct {
+	// Scope 拉黑范围："supplier" = 整个商户；"channel_model" = 某渠道的某个模型。
+	Scope string `json:"scope"`
+	// SupplierID 上游商户 ID（scope=supplier 时必填）。
+	SupplierID int `json:"supplier_id"`
+	// ChannelID 上游渠道 ID（scope=channel_model 时必填）。
+	ChannelID int `json:"channel_id"`
+	// Model 模型名（scope=channel_model 时必填）。
+	Model string `json:"model"`
+}
+
+// BlockUpstream 在上游 A6 侧拉黑「整个商户」或「某渠道的某模型」。
+//
+// POST /admin/usage/upstream-block
+//
+// ⚠️ 这是**有副作用的写操作**：拉黑整个商户会让该商户名下所有渠道退出路由，
+// 且**该商户名下的固定绑定不会自动改绑**（会变成悬空）。前端在调用前必须让操作者
+// 二次确认并显示影响面。
+//
+// 不做在途重试：第一次可能已经成功、只是响应丢失，重试就会重复调用；
+// 失败原因（令牌失效/无权限）从上游原话里带出来，交给人决定。
+func (h *UpstreamCostSettingsHandler) BlockUpstream(c *gin.Context) {
+	if h == nil || h.settingsSvc == nil {
+		response.InternalError(c, "UPSTREAM_COST_INTERNAL: A6 设置服务未装配")
+		return
+	}
+
+	var input upstreamBlockInputDTO
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "UPSTREAM_BLOCK_BAD_REQUEST: 请求体不是合法的 JSON: "+err.Error())
+		return
+	}
+
+	// 每次都用**当前生效**的凭据构造客户端：管理员刚在面板上改完令牌，
+	// 下一次点按钮就该用上，不该等到进程重启。
+	cfg := h.settingsSvc.Effective(c.Request.Context()).ClientConfig()
+	client := service.NewA6Client(cfg)
+	if !client.Configured() {
+		response.BadRequest(c, "UPSTREAM_BLOCK_NOT_CONFIGURED: 上游 A6 凭据未配置，无法执行拉黑")
+		return
+	}
+
+	scope := strings.TrimSpace(input.Scope)
+	var err error
+	switch scope {
+	case "supplier":
+		if input.SupplierID <= 0 {
+			response.BadRequest(c, "UPSTREAM_BLOCK_BAD_REQUEST: 缺少商户 ID")
+			return
+		}
+		logger.LegacyPrintf("handler.admin.upstream_block",
+			"[UpstreamBlock] 请求拉黑整个商户: supplier_id=%d", input.SupplierID)
+		err = client.BlockSupplier(c.Request.Context(), input.SupplierID)
+	case "channel_model":
+		model := strings.TrimSpace(input.Model)
+		if input.ChannelID <= 0 || model == "" {
+			response.BadRequest(c, "UPSTREAM_BLOCK_BAD_REQUEST: 缺少渠道 ID 或模型名")
+			return
+		}
+		logger.LegacyPrintf("handler.admin.upstream_block",
+			"[UpstreamBlock] 请求拉黑渠道模型: channel_id=%d model=%s", input.ChannelID, model)
+		err = client.DisableChannelModel(c.Request.Context(), input.ChannelID, model)
+	default:
+		response.BadRequest(c, "UPSTREAM_BLOCK_BAD_REQUEST: scope 必须是 supplier 或 channel_model")
+		return
+	}
+
+	if err != nil {
+		// 把上游原话带回去：401/403 的原因（令牌失效、无权限）只在响应体里，
+		// 换成笼统的「拉黑失败」会让操作者只能靠猜。
+		logger.LegacyPrintf("handler.admin.upstream_block",
+			"[UpstreamBlock] 拉黑失败: scope=%s supplier_id=%d channel_id=%d err=%v",
+			scope, input.SupplierID, input.ChannelID, err)
+		response.InternalError(c, "UPSTREAM_BLOCK_FAILED: 上游拉黑失败: "+err.Error())
+		return
+	}
+
+	logger.LegacyPrintf("handler.admin.upstream_block",
+		"[UpstreamBlock] 拉黑成功: scope=%s supplier_id=%d channel_id=%d model=%s",
+		scope, input.SupplierID, input.ChannelID, strings.TrimSpace(input.Model))
+	response.Success(c, gin.H{"scope": scope})
+}
+
+// writeUpstreamCostSettingsError 把设置服务的哨兵错误翻译成 HTTP 状态码。
 // 逐条映射而不是一律 500：这些错误的处置方式完全不同——URL 填错要人改，
 // 加密器缺席要找运维。全都回 500 的话，面板只能显示「服务器错误」，
 // 而真正该看到那句话的人（正在填表单的管理员）拿不到任何可行动的提示。

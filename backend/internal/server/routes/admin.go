@@ -715,6 +715,11 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 页面上那一列成本——成本是空的时候，人来这里找原因。
 		usage.GET("/upstream-cost/settings", h.Admin.UpstreamCostSettings.Settings)
 		usage.PUT("/upstream-cost/settings", h.Admin.UpstreamCostSettings.UpdateSettings)
+		// 上游拉黑：把「这家商户/这个渠道这个模型有问题」直接在页面上处置掉。
+		// 与上面那份凭据同源（复用同一套系统访问令牌），因此放在同一个 handler 上——
+		// 它本来就是"与上游 A6 打交道"的那一处。
+		// ⚠️ 写操作：拉黑整个商户会让该商户名下所有渠道退出路由。
+		usage.POST("/upstream-block", h.Admin.UpstreamCostSettings.BlockUpstream)
 		// 盈亏排除名单：内部人员的收入不计入盈亏，但其上游成本照算。
 		// 面板上它和上面那份凭据挨着放，但接口分开——凭据保存失败不该让
 		// 名单也跟着不生效。
