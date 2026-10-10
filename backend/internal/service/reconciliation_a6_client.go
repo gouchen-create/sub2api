@@ -34,6 +34,15 @@ const (
 	a6SelfLogPath = "/api/log/self"
 	// a6LogTypeConsumption 账单类型：2 表示消费类日志，固定传 2。
 	a6LogTypeConsumption = "2"
+	// a6LogTypeFailure 日志类型：5 表示「请求失败」类日志。
+	//
+	// 与消费日志(type=2)的关键差别：失败请求**不产生消费记录**，只在这一类里留痕。
+	// 而它对失败归因是决定性的 —— 实测该类记录里带 marketplace_supplier_id /
+	// marketplace_supplier_name，即「是哪家商户把这次请求打回的」。
+	//
+	// ⚠️ 该类日志保留量极小（实测仅约 405 条，而消费日志 4.5 万+），过期即查不到。
+	// 所以失败归因必须**尽快**做，不能拖到隔天或等兜底补账。
+	a6LogTypeFailure = "5"
 	// a6UserAgent 让上游访问日志能识别出采集来源。
 	a6UserAgent = "sub2api-reconciliation/1.0"
 
@@ -687,6 +696,120 @@ func (c *A6Client) FetchBillByRequestID(ctx context.Context, requestID string) (
 		})
 	}
 	return ReconciliationA6Bill{}, false, nil
+}
+
+// A6FailureInfo 是上游「请求失败」日志里与归因到商户有关的那部分信息。
+//
+// 刻意**不复用** ReconciliationA6Bill：那个结构要求 quota 合法（缺失/非法/为负的记录
+// 会被当成脏数据跳过），而失败日志的 quota 常常就是 0 或缺失 —— 复用会把我们真正
+// 要找的那些记录全部过滤掉，表现为"明明上游有这条失败记录，却始终查不到"。
+type A6FailureInfo struct {
+	// RequestID 上游请求 ID，逐字相等才认。
+	RequestID string
+	// SupplierID 打回这次请求的商户 ID；上游未回传时为 nil。
+	//
+	// 这是整件事的目的：有它才能一键拉黑「整个商户」。
+	SupplierID *int
+	// SupplierName 商户名，冗余带一份供页面直接显示。
+	SupplierName string
+	// ChannelID 上游渠道 ID；失败日志里常为 0（未落到具体渠道）。
+	ChannelID *int
+	// Model 上游模型名。
+	Model string
+	// Message 上游给出的失败描述。
+	Message string
+}
+
+// FetchFailureByRequestID 按请求 ID 反查上游的**失败**记录，用于失败归因到商户。
+//
+// 对应 A6：GET /api/log/self?type=5&request_id={id}
+//
+// 三态与 FetchBillByRequestID 一致：(info, true, nil) 查到 / (_, false, nil) 上游没有
+// 这条失败记录（可能尚未落库、或已超出该类日志的保留窗口）/ (_, false, err) 查询本身失败。
+//
+// 为什么单独开一个方法而不是给 FetchBillByRequestID 加参数：两者的解析规则不同
+// ——账单要金额与计费单位、失败记录不要；把两种语义塞进一个方法，往后每次改一边
+// 都得同时想另一边会不会被带坏。
+func (c *A6Client) FetchFailureByRequestID(ctx context.Context, requestID string) (A6FailureInfo, bool, error) {
+	wanted := strings.TrimSpace(requestID)
+	if wanted == "" {
+		return A6FailureInfo{}, false, ErrReconciliationA6RequestIDEmpty
+	}
+	cfg := c.Config()
+	if err := c.validate(cfg); err != nil {
+		return A6FailureInfo{}, false, err
+	}
+
+	params := url.Values{
+		"p":          {"1"},
+		"page_size":  {strconv.Itoa(a6RequestIDLookupPageSize)},
+		"type":       {a6LogTypeFailure},
+		"request_id": {wanted},
+	}
+	envelope, err := c.getJSONWithRetry(ctx, cfg, a6SelfLogPath, params)
+	if err != nil {
+		return A6FailureInfo{}, false, err
+	}
+	if err := a6CheckSuccess(envelope); err != nil {
+		return A6FailureInfo{}, false, err
+	}
+	extracted, err := a6ExtractBillItems(envelope)
+	if err != nil {
+		return A6FailureInfo{}, false, err
+	}
+
+	var found *A6FailureInfo
+	for _, item := range extracted.items {
+		// 逐字相等才认：上游会静默忽略不认识的查询参数，一旦参数失效就会把整页
+		// 日志当成结果返回，不核对就会把别人的商户写到自己这条调用上。
+		if strings.TrimSpace(a6OptionalString(item, "request_id")) != wanted {
+			continue
+		}
+		info := A6FailureInfo{
+			RequestID:    wanted,
+			SupplierID:   a6OptionalInt(item, "marketplace_supplier_id", "supplier_id"),
+			SupplierName: a6OptionalString(item, "marketplace_supplier_name", "supplier_name"),
+			ChannelID:    a6OptionalInt(item, "channel"),
+			Model:        a6OptionalString(item, "model_name", "model"),
+			Message:      a6OptionalString(item, "content"),
+		}
+		if found != nil {
+			// 同一请求 ID 出现多条失败记录：归因存在歧义，不猜。
+			// 只保留商户信息一致的那种；不一致就直接报错交人工。
+			if !a6SameSupplier(found, &info) {
+				return A6FailureInfo{}, false, ErrReconciliationA6InvalidResponse.WithMetadata(map[string]string{
+					"reason": "duplicate_request_id_failure_conflicting_supplier",
+				})
+			}
+			continue
+		}
+		copied := info
+		found = &copied
+	}
+	if found != nil {
+		return *found, true, nil
+	}
+
+	// 与账单反查同样的防呆：精确反查不可能把整页塞满，塞满说明过滤参数没生效。
+	if len(extracted.items) >= a6RequestIDLookupPageSize {
+		return A6FailureInfo{}, false, ErrReconciliationA6RequestIDIgnored.WithMetadata(map[string]string{
+			"returned": strconv.Itoa(len(extracted.items)),
+		})
+	}
+	return A6FailureInfo{}, false, nil
+}
+
+// a6SameSupplier 判断两条失败记录指向的是不是同一个商户。
+//
+// 只比 ID：名字可能因为上游改名而不同，但 ID 变了就是另一家，必须区分开。
+func a6SameSupplier(a, b *A6FailureInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a.SupplierID == nil || b.SupplierID == nil {
+		return a.SupplierID == nil && b.SupplierID == nil
+	}
+	return *a.SupplierID == *b.SupplierID
 }
 
 // ==================== 规范化 ====================
