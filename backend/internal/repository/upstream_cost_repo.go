@@ -98,7 +98,11 @@ SET upstream_cost_original   = $2,
     upstream_cost_currency   = $3,
     upstream_cost_fetched_at = $4,
     upstream_first_token_ms  = $5,
-    upstream_duration_ms     = $6
+    upstream_duration_ms     = $6,
+    upstream_supplier_id     = $7,
+    upstream_supplier_name   = $8,
+    upstream_channel_id      = $9,
+    upstream_target_channel_id = $10
 WHERE id = $1`
 
 // ResolveUpstreamCost 实现 service.UpstreamCostRepository。
@@ -113,7 +117,8 @@ func (r *upstreamCostRepo) ResolveUpstreamCost(
 	}
 	if _, err := r.db.ExecContext(ctx, upstreamCostResolveQuery,
 		usageLogID, value.Original, value.Currency, at,
-		value.FirstTokenMs, value.UpstreamDurationMs); err != nil {
+		value.FirstTokenMs, value.UpstreamDurationMs,
+		value.SupplierID, value.SupplierName, value.ChannelID, value.TargetChannelID); err != nil {
 		return fmt.Errorf("resolve upstream cost: %w", err)
 	}
 	return nil

@@ -1905,6 +1905,20 @@ export interface AdminUsageLog extends UsageLog {
    * 不能拿去和本站 duration_ms 做毫秒级比较。null 含义同上。
    */
   upstream_duration_ms?: number | null
+  /**
+   * 上游（A6）商户 ID，仅管理员可见。
+   *
+   * 为什么单列存商户：2026-10-10 的漏计费事件里，按**模型**聚合会误判成
+   * 「某几个模型的特性」，按**商户**聚合才立刻定位到 4 个坏商户 ——
+   * 商户是能被拉黑/切换的最小单元。null = 尚未对账到，不是 0。
+   */
+  upstream_supplier_id?: number | null
+  /** 上游（A6）商户名（冗余自上游账单，便于直接显示）。 */
+  upstream_supplier_name?: string | null
+  /** 上游（A6）实际计费渠道 ID。null 含义同上。 */
+  upstream_channel_id?: number | null
+  /** 上游（A6）目标渠道 ID。null 含义同上。 */
+  upstream_target_channel_id?: number | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null

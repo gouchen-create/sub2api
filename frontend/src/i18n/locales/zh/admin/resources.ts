@@ -528,6 +528,13 @@ export default {
       // 只叫「差值」：紧挨着「延迟 / 上游延迟」，且每格数值都自带 ms 单位，
       // 表头再写「延迟差值(ms)」属于重复占用列宽。
       upstreamOverhead: '差值',
+      // 上游归属：商家 ID / 商家名 / A6 渠道 / 目标渠道 四个值同列堆叠。
+      // 表头点明「上游」，与左邻的「上游延迟」保持同一口径前缀。
+      upstreamSupplier: '上游商家',
+      supplierId: '商家 ID',
+      supplierName: '商家名',
+      upstreamChannel: 'A6 渠道',
+      upstreamTargetChannel: '目标渠道',
       profit: '盈亏',
       profitMargin: '利润率',
       totalUpstreamCost: '总成本',

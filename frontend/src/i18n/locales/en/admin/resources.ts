@@ -531,6 +531,13 @@ export default {
       // Just "Diff": the two columns to the left already say what is being subtracted,
       // and every cell carries its own `ms` suffix.
       upstreamOverhead: 'Diff',
+      // Upstream attribution: supplier id / name / A6 channel / target channel,
+      // stacked in one column to keep the table from growing too wide.
+      upstreamSupplier: 'Upstream Supplier',
+      supplierId: 'Supplier ID',
+      supplierName: 'Supplier',
+      upstreamChannel: 'A6 Channel',
+      upstreamTargetChannel: 'Target Channel',
       profit: 'Profit',
       profitMargin: 'Margin',
       totalUpstreamCost: 'Total Cost',

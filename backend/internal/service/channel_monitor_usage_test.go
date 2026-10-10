@@ -109,7 +109,12 @@ func TestCallProviderStreamReadsFirstToken(t *testing.T) {
 	require.Equal(t, "req-stream-1", monitorUpstreamRequestID(opts, call.Headers))
 	// 记账行的「上游」列要显示**协议路径**，不是 base URL：
 	// 拿到域名管理员看不出这次探针验的是哪条协议链路。
-	require.Equal(t, providerOpenAIPath, call.Endpoint)
+	//
+	// ⚠️ 这里必须跟着本用例的 APIMode 走：opts 设的是 responses，
+	// 所以真实路径就是 providerOpenAIResponsesPath。曾误写成 providerOpenAIPath
+	// （chat 路径），而当时用的 -run 过滤器没命中本测试名，导致错误断言
+	// 在"验证通过"的表象下存活了一轮 —— 断言协议路径时务必与 apiMode 对齐。
+	require.Equal(t, providerOpenAIResponsesPath, call.Endpoint)
 	require.True(t, strings.HasPrefix(call.Endpoint, "/v1/"), "必须是路径形态，不能是完整 URL")
 
 	// 同样的 Body 换成 stream:false（默认 body 形态）时必须走整包读取，不产生首字。

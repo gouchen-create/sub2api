@@ -975,6 +975,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_cost_currency
 			sql.NullInt64{},   // upstream_first_token_ms
 			sql.NullInt64{},   // upstream_duration_ms
+			sql.NullInt64{},   // upstream_supplier_id
+			sql.NullString{},  // upstream_supplier_name
+			sql.NullInt64{},   // upstream_channel_id
+			sql.NullInt64{},   // upstream_target_channel_id
 		}})
 		require.NoError(t, err)
 		require.Equal(t, 2, log.ImageCount)
@@ -1059,6 +1063,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_cost_currency
 			sql.NullInt64{},   // upstream_first_token_ms
 			sql.NullInt64{},   // upstream_duration_ms
+			sql.NullInt64{},   // upstream_supplier_id
+			sql.NullString{},  // upstream_supplier_name
+			sql.NullInt64{},   // upstream_channel_id
+			sql.NullInt64{},   // upstream_target_channel_id
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1126,6 +1134,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_cost_currency
 			sql.NullInt64{},   // upstream_first_token_ms
 			sql.NullInt64{},   // upstream_duration_ms
+			sql.NullInt64{},   // upstream_supplier_id
+			sql.NullString{},  // upstream_supplier_name
+			sql.NullInt64{},   // upstream_channel_id
+			sql.NullInt64{},   // upstream_target_channel_id
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1194,6 +1206,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_cost_currency
 			sql.NullInt64{},   // upstream_first_token_ms
 			sql.NullInt64{},   // upstream_duration_ms
+			sql.NullInt64{},   // upstream_supplier_id
+			sql.NullString{},  // upstream_supplier_name
+			sql.NullInt64{},   // upstream_channel_id
+			sql.NullInt64{},   // upstream_target_channel_id
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)

@@ -711,6 +711,17 @@ type AdminUsageLog struct {
 	//
 	// ⚠️ 上游只回整数秒，本值由秒 ×1000 而来，有效精度为秒级；nil = 尚未对账到。
 	UpstreamDurationMs *int `json:"upstream_duration_ms,omitempty"`
+	// UpstreamSupplierID 是上游（A6）商户 ID，仅管理端可见。
+	//
+	// 用途是「归因到可执行单元」：2026-10-10 的漏计费事件里，按模型聚合会误判为
+	// 「某几个模型的特性」，按商户聚合才立刻定位到 4 个坏商户。nil = 尚未对账到。
+	UpstreamSupplierID *int `json:"upstream_supplier_id,omitempty"`
+	// UpstreamSupplierName 是上游商户名，供页面直接显示（冗余自上游账单）。
+	UpstreamSupplierName *string `json:"upstream_supplier_name,omitempty"`
+	// UpstreamChannelID 是上游实际计费渠道 ID；nil = 尚未对账到。
+	UpstreamChannelID *int `json:"upstream_channel_id,omitempty"`
+	// UpstreamTargetChannelID 是上游目标渠道 ID；nil = 尚未对账到。
+	UpstreamTargetChannelID *int `json:"upstream_target_channel_id,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 

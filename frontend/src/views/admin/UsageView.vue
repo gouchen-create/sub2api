@@ -670,6 +670,9 @@ const allColumns = computed(() => [
   // 靠右对齐：这一列全是数字，位数从 2 位到 5 位不等，左对齐会让个位/十位参差不齐，
   // 纵向扫视时反而看不出量级差异。
   { key: 'upstream_overhead', label: t('admin.usage.upstreamOverhead'), sortable: false, class: 'text-right' },
+  // 上游商家归属：4 个值同属「这条请求最终由哪家商户的哪个渠道服务」，
+  // 合成一列堆叠展示（与左侧「端点」列同样的形态），拆成 4 列会把表格撑得过宽。
+  { key: 'upstream_supplier', label: t('admin.usage.upstreamSupplier'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },

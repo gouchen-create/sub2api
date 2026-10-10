@@ -345,6 +345,38 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
         </template>
 
+        <!-- 上游商家归属：这一笔最终由「哪家商户的哪个渠道」服务。
+             四个值同属一件事，堆叠展示（与左侧「端点」列同形态）；拆成 4 列会把表格撑得过宽。
+
+             空值一律「—」：这些值来自上游账单，是**延迟对账**回来的
+             （实测 P50≈13s、P99≈599s），刚发出的请求本来就是空的。
+             折成 0 会被读成「第 0 号商户」，与「还不知道是哪家」正好相反 ——
+             而这一列的全部意义就是定位责任方，误导的代价比留空大得多。 -->
+        <template #cell-upstream_supplier="{ row }">
+          <div
+            v-if="row.upstream_supplier_id != null || row.upstream_supplier_name || row.upstream_channel_id != null || row.upstream_target_channel_id != null"
+            class="max-w-[220px] space-y-0.5 text-xs"
+          >
+            <div class="break-all text-gray-700 dark:text-gray-300">
+              <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.usage.supplierId') }}:</span>
+              <span class="ml-1 tabular-nums">{{ row.upstream_supplier_id ?? '-' }}</span>
+            </div>
+            <div class="break-all text-gray-700 dark:text-gray-300">
+              <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.usage.supplierName') }}:</span>
+              <span class="ml-1">{{ row.upstream_supplier_name?.trim() || '-' }}</span>
+            </div>
+            <div class="break-all text-gray-700 dark:text-gray-300">
+              <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.usage.upstreamChannel') }}:</span>
+              <span class="ml-1 tabular-nums">{{ row.upstream_channel_id ?? '-' }}</span>
+            </div>
+            <div class="break-all text-gray-700 dark:text-gray-300">
+              <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.usage.upstreamTargetChannel') }}:</span>
+              <span class="ml-1 tabular-nums">{{ row.upstream_target_channel_id ?? '-' }}</span>
+            </div>
+          </div>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500" title="—">—</span>
+        </template>
+
         <template #cell-created_at="{ value }">
           <span class="text-sm text-gray-600 dark:text-gray-400">{{ formatDateTime(value) }}</span>
         </template>

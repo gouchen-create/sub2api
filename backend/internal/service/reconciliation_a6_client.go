@@ -289,6 +289,19 @@ type ReconciliationA6Bill struct {
 	// ⚠️ 精度只到秒：上游只回整数秒，所以本字段的有效精度是 1000ms，
 	// 不能拿它和本站 duration_ms 做毫秒级比较。
 	UpstreamDurationMs *int
+	// SupplierID 上游（A6）商户 ID，取自账单 marketplace_supplier_id。
+	//
+	// 为什么必须落到「商户」这一级：2026-10-10 的漏计费事件里，按**模型**聚合会得出
+	// 「gpt-5.5 / gpt-6-astra 有问题」的错误结论，按**商户**聚合才立刻干净
+	// （18 个商户里只有 4 个丢，其余 14 个一笔不丢）。归因粒度必须落到能被
+	// 拉黑/切换的最小单元，商户就是那个单元。
+	SupplierID *int
+	// SupplierName 上游商户名，冗余存一份便于页面直接显示。
+	SupplierName string
+	// ChannelID 上游实际计费渠道 ID，取自账单 channel。
+	ChannelID *int
+	// TargetChannelID 上游目标渠道 ID，取自账单 marketplace_target_channel_id。
+	TargetChannelID *int
 	// Other 原始 other 字段：对象与被双重编码的 JSON 字符串都已解开；无法解析时为 nil。
 	Other map[string]any
 	// Raw 上游原始记录，供 raw jsonb 留存与重放。
@@ -747,8 +760,17 @@ func (c *A6Client) normalizeBill(raw map[string]any, quotaPerUnit decimal.Decima
 		CostUSD:             quota.Div(quotaPerUnit),
 		FirstTokenMs:        a6OptionalInt(other, "frt", "first_response_time"),
 		UpstreamDurationMs:  a6DurationSecondsToMs(raw, "use_time", "useTime"),
-		Other:               other,
-		Raw:                 raw,
+		// 商户 / 渠道归属取自**账单顶层**字段（A6 把它们平铺在记录根上，不在 other 里）：
+		//   marketplace_supplier_id / marketplace_supplier_name / channel /
+		//   marketplace_target_channel_id
+		// 之所以要落库：本次漏计费事件里只有按「商户」聚合才能定位到真凶，
+		// 按模型聚合会被误导。这四个字段是对账链路顺带就能拿到的，零额外请求。
+		SupplierID:      a6OptionalInt(raw, "marketplace_supplier_id", "supplier_id"),
+		SupplierName:    a6OptionalString(raw, "marketplace_supplier_name", "supplier_name"),
+		ChannelID:       a6OptionalInt(raw, "channel"),
+		TargetChannelID: a6OptionalInt(raw, "marketplace_target_channel_id"),
+		Other:           other,
+		Raw:             raw,
 	}, ""
 }
 
@@ -825,6 +847,88 @@ func a6HasMorePage(total, page, pageSize, itemCount int) bool {
 // ctx 取消/超时立即中止并把 ctx 的错误交给调用方，不做无意义的重试。
 // cfg 由调用方以快照传入：整轮重试都用同一份凭据，中途被面板换掉也不影响本次请求。
 // 日志只打路径，不打查询串、不打响应体，也绝不打令牌与用户标识。
+// ==================== 处置动作（拉黑） ====================
+//
+// 为什么复用对账配置：A6 控制台 API 的鉴权就是「系统访问令牌 + 用户标识」
+// （Authorization: Bearer + New-API-User），与拉账单完全同一套。配置与 HTTP
+// 客户端都已就绪，因此这里不引入任何新凭据、也不需要浏览器或模拟点击。
+
+// BlockSupplier 拉黑【整个商户】：该商户当前及以后新挂的渠道都不再参与路由。
+//
+// 对应 A6：POST /api/marketplace/suppliers/{id}/block
+//
+// ⚠️ 有副作用：调用方应先取该行的上游商户 ID，并把「影响面」（该商户名下的
+// 固定绑定）提示给操作者 —— 被拉黑商户名下的 pin 不会自动改绑。
+func (c *A6Client) BlockSupplier(ctx context.Context, supplierID int) error {
+	if supplierID <= 0 {
+		return ErrReconciliationA6RequestFailed.WithCause(errors.New("supplier id must be positive"))
+	}
+	cfg := c.Config()
+	if err := c.validate(cfg); err != nil {
+		return err
+	}
+	return c.postJSON(ctx, cfg, fmt.Sprintf("/api/marketplace/suppliers/%d/block", supplierID), nil)
+}
+
+// DisableChannelModel 拉黑【某渠道的某个模型】，不影响该渠道的其它模型。
+//
+// 对应 A6：POST /api/marketplace/channels/{id}/disable?model={模型名}
+func (c *A6Client) DisableChannelModel(ctx context.Context, channelID int, model string) error {
+	if channelID <= 0 {
+		return ErrReconciliationA6RequestFailed.WithCause(errors.New("channel id must be positive"))
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ErrReconciliationA6RequestFailed.WithCause(errors.New("model required"))
+	}
+	cfg := c.Config()
+	if err := c.validate(cfg); err != nil {
+		return err
+	}
+	params := url.Values{}
+	params.Set("model", model)
+	return c.postJSON(ctx, cfg, fmt.Sprintf("/api/marketplace/channels/%d/disable", channelID), params)
+}
+
+// postJSON 发一次 POST（无请求体，参数走 query），仅 2xx 视为成功。
+//
+// 刻意**不重试**：拉黑是有副作用的写操作，若第一次其实已经成功、只是响应丢失，
+// 重试就会重复调用；而且管理员正盯着页面等结果，失败直接回报比悄悄重试更可控。
+func (c *A6Client) postJSON(ctx context.Context, cfg ReconciliationA6Config, path string, params url.Values) error {
+	requestURL := cfg.BaseURL + path
+	if len(params) > 0 {
+		requestURL += "?" + params.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, nil)
+	if err != nil {
+		return ErrReconciliationA6RequestFailed.WithCause(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.AccessToken)
+	req.Header.Set("New-API-User", cfg.UserID)
+	req.Header.Set("Cache-Control", "no-store")
+	req.Header.Set("User-Agent", a6UserAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return a6ClassifyTransportError(err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, a6BodyDrainBytes))
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 与 getJSON 同样把上游原话带出来：401/403 的原因（令牌失效、无权限）
+		// 只在响应体里，丢掉它管理员就只能看到笼统的「上游 401」。
+		snippet := a6ReadErrorBodySnippet(resp.Body, cfg)
+		return ErrReconciliationA6RequestFailed.WithMetadata(map[string]string{
+			"upstream_status": strconv.Itoa(resp.StatusCode),
+			"detail":          snippet,
+		})
+	}
+	return nil
+}
+
 func (c *A6Client) getJSONWithRetry(ctx context.Context, cfg ReconciliationA6Config, path string, params url.Values) (map[string]any, error) {
 	var lastErr error
 	for attempt := 0; attempt < a6MaxAttempts; attempt++ {
@@ -1247,6 +1351,24 @@ func a6DurationSecondsToMs(source map[string]any, names ...string) *int {
 	}
 	ms := *seconds * 1000
 	return &ms
+}
+
+// a6OptionalString 按候选名读取一个可选的非空字符串；缺失、类型不符或全空白时返回 ""。
+//
+// 商户名可能带首尾空白，统一 TrimSpace 后再判断，避免把 " " 当成有效值存进库。
+func a6OptionalString(source map[string]any, names ...string) string {
+	if source == nil {
+		return ""
+	}
+	raw, ok := a6Lookup(source, names...)
+	if !ok {
+		return ""
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 // a6DecodeLooseObject 把对象 / 被双重编码的 JSON 字符串 / 字节串解成 map。

@@ -226,6 +226,21 @@ type UsageLog struct {
 	UpstreamFirstTokenMs *int
 	// UpstreamDurationMs 见 UpstreamFirstTokenMs。
 	UpstreamDurationMs *int
+	// UpstreamSupplierID 上游（A6）商户 ID，取自账单 marketplace_supplier_id。
+	//
+	// 为什么单独存商户：2026-10-10 的漏计费事件里，按**模型**聚合会得出
+	// 「gpt-5.5 / gpt-6-astra 有问题」的错误结论（它们只是恰好被路由到了坏商户），
+	// 按**商户**聚合才立刻干净 —— 18 个商户里只有 4 个丢，其余 14 个一笔不丢。
+	// 商户是能被拉黑/切换的最小单元，归因必须落到这一级。
+	//
+	// 与 UpstreamCostOriginal 同生命周期：nil = 尚未对账到，非 0。
+	UpstreamSupplierID *int
+	// UpstreamSupplierName 上游商户名，冗余存一份便于页面直接显示。
+	UpstreamSupplierName *string
+	// UpstreamChannelID 上游实际计费渠道 ID（账单 channel）。
+	UpstreamChannelID *int
+	// UpstreamTargetChannelID 上游目标渠道 ID（账单 marketplace_target_channel_id）。
+	UpstreamTargetChannelID *int
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool

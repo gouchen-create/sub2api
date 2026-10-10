@@ -78,6 +78,17 @@ type UpstreamCostValue struct {
 	//
 	// ⚠️ 上游只回整数秒，本值由秒 ×1000 而来，有效精度仍为秒级。
 	UpstreamDurationMs *int
+	// SupplierID 上游（A6）商户 ID；账单未回传时为 nil。
+	//
+	// 与金额、延迟同批落库，理由相同：它们都出自同一条上游账单。
+	// 而商户归属单独有意义 —— 定位「是哪一家在捣鬼」时，商户维度才是不被误导的粒度。
+	SupplierID *int
+	// SupplierName 上游商户名，冗余存一份供页面直接显示。
+	SupplierName string
+	// ChannelID 上游实际计费渠道 ID。
+	ChannelID *int
+	// TargetChannelID 上游目标渠道 ID。
+	TargetChannelID *int
 }
 
 // UpstreamCostPending 是一条「该去查成本」的使用记录。
@@ -304,6 +315,10 @@ func (s *UpstreamCostService) resolveOne(ctx context.Context, item *UpstreamCost
 		Currency:           "USD",
 		FirstTokenMs:       bill.FirstTokenMs,
 		UpstreamDurationMs: bill.UpstreamDurationMs,
+		SupplierID:         bill.SupplierID,
+		SupplierName:       bill.SupplierName,
+		ChannelID:          bill.ChannelID,
+		TargetChannelID:    bill.TargetChannelID,
 	}
 	if err := s.repo.ResolveUpstreamCost(ctx, item.UsageLogID, value, time.Now().UTC()); err != nil {
 		result.Failed++
