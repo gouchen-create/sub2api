@@ -104,6 +104,16 @@ type OpsInsertErrorLogInput struct {
 	UpstreamStatusCode   *int
 	UpstreamErrorMessage *string
 	UpstreamErrorDetail  *string
+	// UpstreamSupplierID 打回这次请求的上游商户 ID（A6 的 marketplace_supplier_id）。
+	//
+	// 只有「请求确实到达了上游、并被上游拒绝」时才可能有值：网络层失败（连接被重置、
+	// 超时等）上游根本没收到，任何字段都拿不到 —— 此处为 nil 是正常且不可补救的。
+	//
+	// ⚠️ 取数时机很关键：上游对「失败类日志」的保留量极小（实测约 405 条，而消费日志
+	// 4.5 万+），过期就再也查不到，因此必须在失败后尽快回填，不能指望隔夜补账。
+	UpstreamSupplierID *int
+	// UpstreamSupplierName 上游商户名，冗余存一份供页面直接显示。
+	UpstreamSupplierName string
 	// UpstreamErrors captures all upstream error attempts observed during handling this request.
 	// It is populated during request processing (gin context) and sanitized+serialized by OpsService.
 	UpstreamErrors []*OpsUpstreamErrorEvent
