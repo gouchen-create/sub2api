@@ -107,6 +107,10 @@ func TestCallProviderStreamReadsFirstToken(t *testing.T) {
 	require.Equal(t, "7", call.Text)
 	require.NotNil(t, call.FirstTokenMs)
 	require.Equal(t, "req-stream-1", monitorUpstreamRequestID(opts, call.Headers))
+	// 记账行的「上游」列要显示**协议路径**，不是 base URL：
+	// 拿到域名管理员看不出这次探针验的是哪条协议链路。
+	require.Equal(t, providerOpenAIPath, call.Endpoint)
+	require.True(t, strings.HasPrefix(call.Endpoint, "/v1/"), "必须是路径形态，不能是完整 URL")
 
 	// 同样的 Body 换成 stream:false（默认 body 形态）时必须走整包读取，不产生首字。
 	opts.BodyOverride["stream"] = false

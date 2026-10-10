@@ -165,8 +165,10 @@ func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model str
 	res.FirstTokenMs = call.FirstTokenMs
 	res.UpstreamRequestID = monitorUpstreamRequestID(opts, call.Headers)
 	res.Usage = call.Usage
-	// 真实打到的上游路径：探针按模板直连原生端点，这里记录下来供「上游」列展示。
-	res.UpstreamEndpoint = strings.TrimSpace(endpoint)
+	// 真实打到的上游协议路径（/v1/chat/completions 等）：探针按模板直连原生端点，
+	// 这里记录下来供使用记录页的「上游」列展示。注意取的是 call.Endpoint（adapter
+	// 算出来的路径），而不是本函数的 endpoint 参数（那是 base URL）。
+	res.UpstreamEndpoint = strings.TrimSpace(call.Endpoint)
 	respText := call.Text
 
 	if err != nil {
@@ -385,6 +387,9 @@ type monitorCallResult struct {
 	Headers http.Header
 	// Stream 本次是否以流式发起。
 	Stream bool
+	// Endpoint 本次实际请求的**协议路径**（/v1/chat/completions 等），由 adapter 决定。
+	// 供记账行填 upstream_endpoint，让使用记录页的「上游」列显示真实协议。
+	Endpoint string
 	// FirstTokenMs 流式时的首个内容块到达耗时。
 	FirstTokenMs *int
 	// Usage 从上游响应里解析出的 token 用量（记账用）。
@@ -407,21 +412,27 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 		return monitorCallResult{}, err
 	}
 	headers := mergeHeaders(adapter.buildHeaders(apiKey), opts)
-	full := joinURL(endpoint, adapter.buildPath(model))
+	// 记下真正要打的协议路径（/v1/chat/completions 等）：使用记录页的「上游」列
+	// 展示的是**路径**，与网关那侧 upstream_endpoint 的口径一致；填 base URL 会让
+	// 那一列显示成域名，管理员看不出这次探针验的是哪条协议。
+	path := adapter.buildPath(model)
+	full := joinURL(endpoint, path)
 
 	// 只有请求体自己声明了 stream=true 才走流式。探针默认 body 恒为 stream=false，
 	// 因此除非管理员在「覆盖」模式的 Body 里显式打开，行为与改动前逐字一致。
 	if monitorRequestBodyStreams(body) {
 		if kind, ok := monitorStreamKind(provider, apiMode); ok {
-			return postJSONStream(ctx, full, body, headers, kind)
+			result, err := postJSONStream(ctx, full, body, headers, kind)
+			result.Endpoint = path
+			return result, err
 		}
 	}
 
 	respBytes, status, respHeaders, err := postRawJSON(ctx, full, body, headers)
 	if err != nil {
-		return monitorCallResult{Status: status, Headers: respHeaders}, err
+		return monitorCallResult{Status: status, Headers: respHeaders, Endpoint: path}, err
 	}
-	result := monitorCallResult{Status: status, Headers: respHeaders, RawBody: string(respBytes)}
+	result := monitorCallResult{Status: status, Headers: respHeaders, RawBody: string(respBytes), Endpoint: path}
 	if provider == MonitorProviderOpenAI && apiMode == MonitorAPIModeResponses {
 		result.Text = extractOpenAIResponsesText(respBytes)
 	} else {
