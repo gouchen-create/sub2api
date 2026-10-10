@@ -324,7 +324,7 @@
              任一侧没取到就显示「—」：0 的含义是「完全没有中转开销」，
              与「还不知道」正好相反，不能互相顶替。 -->
         <template #cell-upstream_overhead="{ row }">
-          <div v-if="overheadFirst(row) != null || overheadDuration(row) != null" class="grid gap-y-0.5 text-xs">
+          <div v-if="overheadFirst(row) != null || overheadDuration(row) != null" class="grid justify-items-end gap-y-0.5 text-xs">
             <span
               v-if="overheadFirst(row) != null"
               class="font-medium tabular-nums"
@@ -887,9 +887,9 @@ const overheadDuration = (
   row: Pick<AdminUsageLog, 'duration_ms' | 'upstream_duration_ms'>,
 ): number | null => upstreamOverheadMs(row.duration_ms, row.upstream_duration_ms)
 
-// 毫秒差值：正数显式带「+」，纵向扫视时一眼分得清「中转多花了几毫秒」
-// 还是「本站反而更快」。单位写在表头，单元格里只放数字，省列宽。
-const formatOverheadMs = (ms: number): string => `${ms > 0 ? '+' : ''}${ms}`
+// 毫秒差值：正数显式带「+」，单位 `ms`（小写）跟在每个数值后面，如 `+724ms`。
+// 单位不放表头：上下两格位数常不同，单位跟着数字走才不会"离得太远"。
+const formatOverheadMs = (ms: number): string => `${ms > 0 ? '+' : ''}${ms}ms`
 
 // 内部探针的入站标记是「伪路径」，是给后端过滤用的（usage_logs.inbound_endpoint），
 // 直接摊在表里没人看得懂。这里只做**显示层**翻译，不改数据本身 ——

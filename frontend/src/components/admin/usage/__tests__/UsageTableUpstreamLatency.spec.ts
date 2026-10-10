@@ -122,27 +122,38 @@ describe('使用记录「上游延迟」列', () => {
   })
 })
 
-describe('使用记录「延迟差值」列', () => {
+describe('使用记录「差值」列', () => {
   // 同样只渲染本列，避免相邻列的同款配色让断言失真。
-  const OVERHEAD_ONLY = [{ key: 'upstream_overhead', label: '延迟差值(ms)' }]
+  const OVERHEAD_ONLY = [{ key: 'upstream_overhead', label: '差值' }]
 
-  it('显示本站与上游的毫秒差值，正负带符号', () => {
+  it('显示本站与上游的毫秒差值，正负带符号且单位 ms 跟在数值后', () => {
     const wrapper = mount(UsageTable as never, mountOptions(
       [{
         ...baseRow,
         first_token_ms: 1500,
-        upstream_first_token_ms: 1000, // +500
+        upstream_first_token_ms: 1000, // +500ms
         duration_ms: 800,
-        upstream_duration_ms: 1000, // −200
+        upstream_duration_ms: 1000, // −200ms
       }],
       OVERHEAD_ONLY,
     ) as never)
 
     const text = wrapper.text()
-    expect(text).toContain('+500')
-    expect(text).toContain('-200')
-    // 单位在表头，单元格里只放数字，不再出现百分号。
+    // 单位跟着每个数值走（不是放表头），且必须是小写 ms。
+    expect(text).toContain('+500ms')
+    expect(text).toContain('-200ms')
     expect(text).not.toContain('%')
+    expect(text).not.toContain('MS')
+  })
+
+  it('数值靠右对齐，让 2~5 位不等长时个位仍能对齐', () => {
+    const wrapper = mount(UsageTable as never, mountOptions(
+      [{ ...baseRow, first_token_ms: 1500, upstream_first_token_ms: 1000 }],
+      OVERHEAD_ONLY,
+    ) as never)
+
+    // 靠右由容器负责（列定义里的 text-right 管表头，单元格内自己 justify-items-end）。
+    expect(wrapper.html()).toContain('justify-items-end')
   })
 
   it('不再重复渲染「首字 / 总耗时」文字标签', () => {
