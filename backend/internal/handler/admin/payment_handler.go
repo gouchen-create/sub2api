@@ -308,8 +308,13 @@ type AdminSubscriptionPlanResult struct {
 	ProductName     string    `json:"product_name"`
 	ForSale         bool      `json:"for_sale"`
 	SortOrder       int       `json:"sort_order"`
-	CreatedAt       time.Time `json:"created_at,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+	// 每人限购（2026-11-11 修）：这两个字段此前没进管理端响应，
+	// 导致后台「订阅套餐」编辑弹窗读不到 → 开关永远显示成「关」，
+	// 管理员一保存就把已配好的限购清成 0。必须在列表里回传。
+	PurchaseLimitEnabled bool      `json:"purchase_limit_enabled"`
+	PurchaseLimitCount   int       `json:"purchase_limit_count"`
+	CreatedAt            time.Time `json:"created_at,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at,omitempty"`
 }
 
 func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInfo map[int64]service.PlanGroupInfo) []AdminSubscriptionPlanResult {
@@ -340,8 +345,12 @@ func adminSubscriptionPlansForResponse(plans []*dbent.SubscriptionPlan, groupInf
 			ProductName:     p.ProductName,
 			ForSale:         p.ForSale,
 			SortOrder:       p.SortOrder,
-			CreatedAt:       p.CreatedAt,
-			UpdatedAt:       p.UpdatedAt,
+			// 不回传这两个字段，管理端编辑弹窗就会把限购误显示为「关」，
+			// 保存后把配置清掉（2026-11-11 修）。
+			PurchaseLimitEnabled: p.PurchaseLimitEnabled,
+			PurchaseLimitCount:   p.PurchaseLimitCount,
+			CreatedAt:            p.CreatedAt,
+			UpdatedAt:            p.UpdatedAt,
 		})
 	}
 	return result
